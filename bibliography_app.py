@@ -80,33 +80,49 @@ def get_coauthors_by_degree(G, author, max_degree=2):
     if author not in G:
         return []
     
+    # Excluded names
+    excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
+    
     results = []
     visited = {author}
+    visited_normalized = {normalize_author_name(author)}
     current_level = {author}
     
     for degree in range(1, max_degree + 1):
         next_level = set()
-        degree_data = []
+        degree_data = {}  # Use dict to deduplicate: normalized_name -> {data}
         
         for node in current_level:
             for nbr in G.neighbors(node):
-                if nbr not in visited:
-                    next_level.add(nbr)
-                    
+                nbr_norm = normalize_author_name(nbr)
+                
+                # Skip if already visited in previous degrees, excluded, or too short
+                if nbr_norm in visited_normalized:
+                    continue
+                if nbr in excluded or len(nbr) <= 2:
+                    continue
+                if nbr_norm in excluded or len(nbr_norm) <= 2:
+                    continue
+                
+                next_level.add(nbr)
+                
+                # Only add to degree_data if not already seen (dedup by normalized name)
+                if nbr_norm not in degree_data:
                     if degree == 1:
                         weight = G[node][nbr].get("weight", 1)
-                        degree_data.append({
+                        degree_data[nbr_norm] = {
                             "Co-author": nbr,
                             "Shared Papers": weight
-                        })
+                        }
                     else:
-                        degree_data.append({"Author": nbr})
+                        degree_data[nbr_norm] = {"Author": nbr}
         
         visited.update(next_level)
+        visited_normalized.update(normalize_author_name(n) for n in next_level)
         current_level = next_level
         
         if degree_data:
-            df = pd.DataFrame(degree_data)
+            df = pd.DataFrame(list(degree_data.values()))
             if degree == 1:
                 df = df.sort_values("Shared Papers", ascending=False)
             else:
@@ -294,10 +310,22 @@ def load_author_stats():
 
 @st.cache_data
 def get_all_authors_sorted(_G):
-    # Filter out problematic author names
+    # Filter out problematic author names and deduplicate by normalized name
     excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
-    authors = [a for a in _G.nodes() if a not in excluded and len(a) > 2]
-    return sorted(authors)
+    
+    # Use a dict to deduplicate by normalized name, keeping the "best" version
+    seen_normalized = {}
+    for a in _G.nodes():
+        if a in excluded or len(a) <= 2:
+            continue
+        norm = normalize_author_name(a)
+        if norm in excluded or len(norm) <= 2:
+            continue
+        # Keep the version with more info (longer name, or first seen)
+        if norm not in seen_normalized or len(a) > len(seen_normalized[norm]):
+            seen_normalized[norm] = a
+    
+    return sorted(seen_normalized.values())
 
 @st.cache_data
 def get_all_countries(_author_stats):
