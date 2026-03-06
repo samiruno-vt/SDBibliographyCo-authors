@@ -337,6 +337,7 @@ author_org_mapping = get_author_org_mapping(author_stats)
 
 st.set_page_config(page_title="SD Bibliography Explorer", layout="wide")
 
+# Custom CSS for tab styling (matching the conference proceedings app)
 st.markdown("""
     <style>
     /* Make tabs more prominent */
@@ -353,23 +354,20 @@ st.markdown("""
         padding-right: 20px;
         background-color: white;
         border-radius: 8px;
+        border: 1px solid #ddd;
         font-weight: 500;
     }
     
     .stTabs [aria-selected="true"] {
-        background-color: #4A90D9;
-        color: white;
-    }
-    
-    /* White background */
-    .stApp {
-        background-color: white;
+        background-color: #1f77b4 !important;
+        color: white !important;
+        border: none;
     }
     </style>
 """, unsafe_allow_html=True)
 
-st.title("System Dynamics Bibliography Explorer")
-st.caption("*(Demo)*")
+# Main title
+st.title("System Dynamics Bibliography Explorer (Demo)")
 st.caption(f"Exploring **{len(df):,}** papers and **{G.number_of_nodes():,}** authors ({int(df['Year'].min())}-{int(df['Year'].max())})")
 
 
