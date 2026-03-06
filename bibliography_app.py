@@ -294,7 +294,10 @@ def load_author_stats():
 
 @st.cache_data
 def get_all_authors_sorted(_G):
-    return sorted(_G.nodes())
+    # Filter out problematic author names
+    excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
+    authors = [a for a in _G.nodes() if a not in excluded and len(a) > 2]
+    return sorted(authors)
 
 @st.cache_data
 def get_all_countries(_author_stats):
@@ -336,12 +339,14 @@ st.set_page_config(page_title="SD Bibliography Explorer", layout="wide")
 
 st.markdown("""
     <style>
+    /* Make tabs more prominent */
     .stTabs [data-baseweb="tab-list"] {
         gap: 8px;
         background-color: #f0f2f6;
         padding: 10px;
         border-radius: 10px;
     }
+    
     .stTabs [data-baseweb="tab"] {
         height: 50px;
         padding-left: 20px;
@@ -350,14 +355,21 @@ st.markdown("""
         border-radius: 8px;
         font-weight: 500;
     }
+    
     .stTabs [aria-selected="true"] {
-        background-color: #2a9d8f;
+        background-color: #4A90D9;
         color: white;
+    }
+    
+    /* White background */
+    .stApp {
+        background-color: white;
     }
     </style>
 """, unsafe_allow_html=True)
 
 st.title("System Dynamics Bibliography Explorer")
+st.caption("*(Demo)*")
 st.caption(f"Exploring **{len(df):,}** papers and **{G.number_of_nodes():,}** authors ({int(df['Year'].min())}-{int(df['Year'].max())})")
 
 
@@ -440,6 +452,11 @@ with tab1:
     tbl = author_stats_norm.merge(author_counts, on="Author", how="left")
     tbl["NumPapers_Filtered"] = tbl["NumPapers_Filtered"].fillna(0).astype(int)
     
+    # Filter out problematic author names
+    excluded_authors = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
+    tbl = tbl[~tbl["Author"].isin(excluded_authors)]
+    tbl = tbl[tbl["Author"].str.len() > 2]  # Filter very short names
+    
     # Apply filters
     tbl = tbl[(tbl["NumPapers_Filtered"] >= min_papers) & (tbl["NumCoauthors"] >= min_coauthors)]
     
@@ -468,7 +485,7 @@ with tab1:
     st.dataframe(tbl_display, use_container_width=True)
     
     # Network visualization
-    st.subheader("Network (Top authors only)")
+    st.subheader("Network (Most prolific authors)")
     
     max_nodes = st.slider("Max nodes to display", 25, 400, 25, key="max_nodes_tab1")
     
