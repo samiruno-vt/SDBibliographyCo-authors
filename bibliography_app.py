@@ -75,9 +75,10 @@ def search_authors(query, all_authors, limit=10, score_cutoff=60):
 # Co-author Functions
 # =============================================================================
 
-def get_coauthors_by_degree(G, author, max_degree=2):
+@st.cache_data
+def get_coauthors_by_degree(_G, author, max_degree=2):
     """Get co-authors up to max_degree hops from author."""
-    if author not in G:
+    if author not in _G:
         return []
     
     # Excluded names
@@ -93,7 +94,7 @@ def get_coauthors_by_degree(G, author, max_degree=2):
         degree_data = {}  # Use dict to deduplicate: normalized_name -> {data}
         
         for node in current_level:
-            for nbr in G.neighbors(node):
+            for nbr in _G.neighbors(node):
                 nbr_norm = normalize_author_name(nbr)
                 
                 # Skip if already visited in previous degrees, excluded, or too short
@@ -109,7 +110,7 @@ def get_coauthors_by_degree(G, author, max_degree=2):
                 # Only add to degree_data if not already seen (dedup by normalized name)
                 if nbr_norm not in degree_data:
                     if degree == 1:
-                        weight = G[node][nbr].get("weight", 1)
+                        weight = _G[node][nbr].get("weight", 1)
                         degree_data[nbr_norm] = {
                             "Co-author": nbr,
                             "Shared Papers": weight
@@ -178,49 +179,36 @@ def plot_coauthor_network(H, center_author):
         return None
     
     n = H.number_of_nodes()
+    
+    # Adjust iterations based on graph size - fewer for large graphs
+    if n > 500:
+        iterations = 50
+    elif n > 200:
+        iterations = 100
+    elif n > 50:
+        iterations = 150
+    else:
+        iterations = 200
+    
     k = 6 / np.sqrt(n) if n > 1 else 1
-    pos = nx.spring_layout(H, seed=42, k=k, iterations=300, scale=3)
+    pos = nx.spring_layout(H, seed=42, k=k, iterations=iterations, scale=3)
     
-    # Edge traces grouped by weight
-    edge_weights = [H[u][v].get("weight", 1) for u, v in H.edges()]
-    max_weight = max(edge_weights) if edge_weights else 1
-    min_weight = min(edge_weights) if edge_weights else 1
-    
-    edge_traces = []
+    # Edge traces - combine into single trace for better performance
+    edge_x = []
+    edge_y = []
     for u, v in H.edges():
         x0, y0 = pos[u]
         x1, y1 = pos[v]
-        weight = H[u][v].get("weight", 1)
-        
-        if max_weight > min_weight:
-            normalized = (weight - min_weight) / (max_weight - min_weight)
-        else:
-            normalized = 0.5
-        
-        line_width = 1.5 + normalized * 6
-        gray_val = int(170 - normalized * 90)
-        
-        # Get paper details for hover
-        papers = H[u][v].get("papers", [])
-        if papers:
-            paper_text = f"{u} ↔ {v}: {weight} paper(s)<br>"
-            for p in papers[:3]:
-                title = p.get('title', '')[:50]
-                year = p.get('year', '')
-                paper_text += f"• {title}... ({year})<br>"
-            if len(papers) > 3:
-                paper_text += f"... and {len(papers)-3} more"
-        else:
-            paper_text = f"{u} ↔ {v}: {weight} paper(s)"
-        
-        edge_traces.append(go.Scatter(
-            x=[x0, x1, None], y=[y0, y1, None],
-            mode="lines",
-            line=dict(width=line_width, color=f"rgb({gray_val},{gray_val},{gray_val})"),
-            hoverinfo="text",
-            hovertext=paper_text,
-            showlegend=False
-        ))
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
+    
+    edge_trace = go.Scatter(
+        x=edge_x, y=edge_y,
+        mode="lines",
+        line=dict(width=1, color="rgba(150,150,150,0.5)"),
+        hoverinfo="skip",
+        showlegend=False
+    )
     
     # Node colors by degree level
     level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d", 3: "#8338ec", 4: "#6c757d"}
@@ -276,7 +264,7 @@ def plot_coauthor_network(H, center_author):
         showlegend=False
     )
     
-    fig = go.Figure(data=edge_traces + [node_trace])
+    fig = go.Figure(data=[edge_trace, node_trace])
     fig.update_layout(
         showlegend=False,
         plot_bgcolor="#f8f9fa",
@@ -390,6 +378,40 @@ st.markdown("""
         background-color: #1f77b4 !important;
         color: white !important;
         border: none;
+    }
+    
+    /* Change tab underline from red to blue */
+    .stTabs [data-baseweb="tab-highlight"] {
+        background-color: #1f77b4 !important;
+    }
+    
+    /* Change slider track and thumb from red to blue */
+    .stSlider [data-baseweb="slider"] [role="slider"] {
+        background-color: #1f77b4 !important;
+    }
+    
+    .stSlider [data-baseweb="slider"] [data-testid="stTickBar"] > div {
+        background-color: #1f77b4 !important;
+    }
+    
+    div[data-baseweb="slider"] > div > div > div {
+        background-color: #1f77b4 !important;
+    }
+    
+    div[data-baseweb="slider"] > div > div:first-child > div {
+        background-color: #1f77b4 !important;
+    }
+    
+    /* Radio button selected color */
+    .stRadio [data-baseweb="radio"] input:checked + div {
+        background-color: #1f77b4 !important;
+        border-color: #1f77b4 !important;
+    }
+    
+    /* Checkbox color */
+    .stCheckbox [data-baseweb="checkbox"] input:checked + div {
+        background-color: #1f77b4 !important;
+        border-color: #1f77b4 !important;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -669,7 +691,7 @@ with tab2:
                     help="1 = direct co-authors only"
                 )
                 
-                # Co-author tables
+                # Co-author tables (cached)
                 degree_dfs = get_coauthors_by_degree(G, selected_author, max_degree=max_degree)
                 
                 if degree_dfs:
@@ -688,6 +710,7 @@ with tab2:
                 
                 # Network visualization
                 st.markdown("---")
+                
                 H = build_coauthor_network(G, selected_author, max_degree=max_degree)
                 
                 if H.number_of_nodes() > 0:
@@ -771,9 +794,16 @@ with tab3:
                         st.success(f"🎉 **{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
                     else:
                         try:
-                            if nx.has_path(G, selected_author_tab3, reference_in_graph):
+                            has_path = nx.has_path(G, selected_author_tab3, reference_in_graph)
+                            
+                            if has_path:
                                 forrester_number = nx.shortest_path_length(G, selected_author_tab3, reference_in_graph)
-                                all_paths = list(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph))
+                                # Limit paths to avoid slowness - just get first 10
+                                all_paths = []
+                                for i, path in enumerate(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph)):
+                                    all_paths.append(path)
+                                    if i >= 9:  # Stop after 10 paths
+                                        break
                                 
                                 st.success(f"**{selected_author_tab3}** has a Forrester Number of **{forrester_number}**")
                                 
