@@ -379,40 +379,6 @@ st.markdown("""
         color: white !important;
         border: none;
     }
-    
-    /* Change tab underline from red to blue */
-    .stTabs [data-baseweb="tab-highlight"] {
-        background-color: #1f77b4 !important;
-    }
-    
-    /* Change slider track and thumb from red to blue */
-    .stSlider [data-baseweb="slider"] [role="slider"] {
-        background-color: #1f77b4 !important;
-    }
-    
-    .stSlider [data-baseweb="slider"] [data-testid="stTickBar"] > div {
-        background-color: #1f77b4 !important;
-    }
-    
-    div[data-baseweb="slider"] > div > div > div {
-        background-color: #1f77b4 !important;
-    }
-    
-    div[data-baseweb="slider"] > div > div:first-child > div {
-        background-color: #1f77b4 !important;
-    }
-    
-    /* Radio button selected color */
-    .stRadio [data-baseweb="radio"] input:checked + div {
-        background-color: #1f77b4 !important;
-        border-color: #1f77b4 !important;
-    }
-    
-    /* Checkbox color */
-    .stCheckbox [data-baseweb="checkbox"] input:checked + div {
-        background-color: #1f77b4 !important;
-        border-color: #1f77b4 !important;
-    }
     </style>
 """, unsafe_allow_html=True)
 
