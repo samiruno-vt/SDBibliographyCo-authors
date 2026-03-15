@@ -605,7 +605,7 @@ with tab1:
                 norm = (num_papers - min_papers_val) / (max_papers - min_papers_val)
             else:
                 norm = 0.5
-            node_sizes.append(15 + norm ** 0.5 * 65)
+            node_sizes.append(float(15 + norm ** 0.5 * 65))
             
             # Color by coauthors
             if max_coauth > 0:
