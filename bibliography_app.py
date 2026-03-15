@@ -893,27 +893,6 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
         showlegend=False
     ))
 
-    # Left-margin annotations with descriptive labels
-    level_label_suffix = {
-        1: " — direct co-author",
-    }
-    annotations = []
-    for lvl in sorted(nodes_by_level.keys()):
-        nodes_in_lvl = nodes_by_level[lvl]
-        _, y = node_pos[nodes_in_lvl[0]]
-        if lvl == 0:
-            label = "Jay Forrester"
-        else:
-            suffix = level_label_suffix.get(lvl, "")
-            label = f"#{lvl}{suffix}"
-        annotations.append(dict(
-            x=-0.8, y=y,
-            text=f"<b>{label}</b>",
-            showarrow=False,
-            font=dict(size=11, color="#555555"),
-            xanchor="right"
-        ))
-
     fig_height = max(380, num_levels * 190)
 
     fig = go.Figure(data=traces)
@@ -921,12 +900,11 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
         showlegend=False,
         plot_bgcolor="#f8f9fa",
         paper_bgcolor="#f8f9fa",
-        margin=dict(l=130, r=30, t=30, b=30),
+        margin=dict(l=30, r=30, t=30, b=30),
         height=fig_height,
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   range=[-2, chart_width + 1]),
+                   range=[-1, chart_width + 1]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-        annotations=annotations,
         dragmode="pan",
         hovermode="closest"
     )
