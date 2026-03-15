@@ -173,26 +173,15 @@ def build_coauthor_network(G, author, max_degree=2):
     return H
 
 
-def _format_edge_hover(u, v, papers):
-    """Build the hover text for an edge between two co-authors."""
-    lines = [f"<b>{u}</b> & <b>{v}</b>", f"{len(papers)} shared paper(s):<br>"]
-    for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
-        year  = p.get("year") or "?"
-        title = p.get("title") or "(no title)"
-        link  = p.get("link")
-        if len(title) > 80:
-            title = title[:77] + "\u2026"
-        if link:
-            lines.append(f"\u2022 <a href='{link}' target='_blank'>{title}</a> ({year})")
-        else:
-            lines.append(f"\u2022 {title} ({year})")
-    return "<br>".join(lines)
-
-
 def plot_coauthor_network(H, center_author):
-    """Create Plotly figure for co-author network."""
+    """Create Plotly figure for co-author network.
+    
+    Edge midpoints are rendered as invisible clickable markers.
+    Clicking one stores the edge key in the point's customdata so the
+    caller can display paper details in a panel below the chart.
+    """
     if H.number_of_nodes() == 0:
-        return None
+        return None, {}
 
     n = H.number_of_nodes()
 
@@ -208,22 +197,23 @@ def plot_coauthor_network(H, center_author):
     k = 6 / np.sqrt(n) if n > 1 else 1
     pos = nx.spring_layout(H, seed=42, k=k, iterations=iterations, scale=3)
 
-    # One visible line + one invisible midpoint marker per edge.
-    # The midpoint marker carries the hover tooltip (easier to hit than a thin line).
+    # Build a lookup: edge_key -> paper list, for use in the panel
+    edge_paper_lookup = {}
+
     edge_traces = []
+    mid_x, mid_y, mid_labels, mid_keys = [], [], [], []
+
     for u, v in H.edges():
         x0, y0 = pos[u]
         x1, y1 = pos[v]
         xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
 
         papers = H[u][v].get("papers", [])
-        if papers:
-            hover_text = _format_edge_hover(u, v, papers)
-        else:
-            weight = H[u][v].get("weight", 1)
-            hover_text = f"<b>{u}</b> & <b>{v}</b><br>{weight} shared paper(s)"
+        weight = H[u][v].get("weight", len(papers) if papers else 1)
+        edge_key = f"{u}|||{v}"
+        edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": weight}
 
-        # Visible thin line (no hover)
+        # Visible line
         edge_traces.append(go.Scatter(
             x=[x0, x1, None], y=[y0, y1, None],
             mode="lines",
@@ -231,17 +221,24 @@ def plot_coauthor_network(H, center_author):
             hoverinfo="skip",
             showlegend=False
         ))
-        # Invisible dot at midpoint that shows the tooltip
-        edge_traces.append(go.Scatter(
-            x=[xm], y=[ym],
-            mode="markers",
-            marker=dict(size=12, color="rgba(0,0,0,0)", line=dict(width=0)),
-            hoverinfo="text",
-            hovertext=hover_text,
-            hoverlabel=dict(bgcolor="white", bordercolor="#aaa",
-                            font=dict(size=12)),
-            showlegend=False
-        ))
+
+        mid_x.append(xm)
+        mid_y.append(ym)
+        mid_labels.append(f"{u} & {v}: {weight} shared paper(s)\n(click to see details below)")
+        mid_keys.append(edge_key)
+
+    # Single trace of invisible midpoint markers — clicking triggers selection
+    edge_traces.append(go.Scatter(
+        x=mid_x, y=mid_y,
+        mode="markers",
+        marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=0)),
+        hoverinfo="text",
+        hovertext=mid_labels,
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=11)),
+        customdata=mid_keys,
+        showlegend=False,
+        name="edges"
+    ))
 
     # Node colors by degree level
     level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d", 3: "#8338ec", 4: "#6c757d"}
@@ -276,10 +273,9 @@ def plot_coauthor_network(H, center_author):
             node_sizes.append(35)
         else:
             node_sizes.append(22)
-    
-    # Hide labels if too many nodes
+
     show_labels = n <= 30
-    
+
     node_trace = go.Scatter(
         x=node_x, y=node_y,
         mode="markers+text" if show_labels else "markers",
@@ -296,7 +292,7 @@ def plot_coauthor_network(H, center_author):
         ),
         showlegend=False
     )
-    
+
     fig = go.Figure(data=edge_traces + [node_trace])
     fig.update_layout(
         showlegend=False,
@@ -308,8 +304,10 @@ def plot_coauthor_network(H, center_author):
         dragmode="pan",
         hovermode="closest"
     )
-    
-    return fig
+
+    return fig, edge_paper_lookup
+
+
 
 
 # =============================================================================
@@ -714,7 +712,7 @@ with tab2:
                 H = build_coauthor_network(G, selected_author, max_degree=max_degree)
                 
                 if H.number_of_nodes() > 0:
-                    fig = plot_coauthor_network(H, selected_author)
+                    fig, edge_paper_lookup = plot_coauthor_network(H, selected_author)
                     
                     st.subheader("Co-author Network")
                     
@@ -733,12 +731,47 @@ with tab2:
                         '<span style="display:inline-flex; align-items:center;">'
                         '<span style="width:12px; height:12px; border-radius:50%; background-color:#8338ec; margin-right:5px;"></span>'
                         '<span style="color:#555; font-size:13px;">3rd degree</span></span>'
-                        '<span style="color:#555; font-size:13px; margin-left:8px;">💡 Hover over edge midpoints to see shared papers (with links where available)</span>'
+                        '<span style="color:#555; font-size:13px; margin-left:8px;">Click on an edge midpoint to see shared papers below</span>'
                         '</div>'
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
-                    
-                    st.plotly_chart(fig, use_container_width=True)
+
+                    # Render chart and capture clicks
+                    event = st.plotly_chart(
+                        fig,
+                        use_container_width=True,
+                        on_select="rerun",
+                        selection_mode="points",
+                        key=f"coauthor_net_{selected_author}"
+                    )
+
+                    # Panel: show papers for clicked edge
+                    clicked_key = None
+                    if event and event.selection and event.selection.get("points"):
+                        for pt in event.selection["points"]:
+                            cd = pt.get("customdata")
+                            if cd and "|||" in str(cd):
+                                clicked_key = str(cd)
+                                break
+
+                    if clicked_key and clicked_key in edge_paper_lookup:
+                        edata = edge_paper_lookup[clicked_key]
+                        u, v = edata["u"], edata["v"]
+                        papers = edata["papers"]
+                        st.markdown(f"**Shared papers: {u} & {v}**")
+                        if papers:
+                            for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
+                                year  = p.get("year") or "?"
+                                title = p.get("title") or "(no title)"
+                                link  = p.get("link")
+                                if link:
+                                    st.markdown(f"- [{title}]({link}) ({year})")
+                                else:
+                                    st.markdown(f"- {title} ({year})")
+                        else:
+                            st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
+                    elif not clicked_key:
+                        st.caption("Click on a connection line (midpoint) to see the shared papers between two authors.")
                 else:
                     st.info("No co-author network to display.")
 
@@ -1153,11 +1186,11 @@ with tab3:
                     st.markdown("---")
 
                     if selected_author_tab3 == reference_in_graph:
-                        st.success(f"🎉 **{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
+                        st.success(f"**{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
 
                     elif not nx.has_path(G, selected_author_tab3, reference_in_graph):
                         st.warning(
-                            f"⚠️ **{selected_author_tab3}** is not connected to {REFERENCE_AUTHOR} "
+                            f"**{selected_author_tab3}** is not connected to {REFERENCE_AUTHOR} "
                             "in the co-author network."
                         )
 
