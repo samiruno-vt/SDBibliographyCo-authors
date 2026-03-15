@@ -1028,18 +1028,6 @@ with tab4:
 
         st.caption(f"Showing **{len(view_df):,}** authors")
 
-        # --- Summary counts by distance ---
-        if selected_dist == "All":
-            st.subheader("Authors per Forrester Number")
-            summary = (
-                all_dist_df.groupby("Forrester Number")
-                .size()
-                .rename("Count")
-                .reset_index()
-            )
-            summary.index = summary["Forrester Number"]
-            st.bar_chart(summary["Count"])
-
         st.divider()
 
         # --- Main table ---
@@ -1051,6 +1039,18 @@ with tab4:
         display_df = view_df[["Forrester Number", "Author", "Papers", "Co-authors", "Country", "Organization"]].copy()
         display_df.index = range(1, len(display_df) + 1)
         st.dataframe(display_df, use_container_width=True, height=600)
+
+        # --- Summary counts by distance ---
+        if selected_dist == "All":
+            st.subheader("Authors per Forrester Number")
+            summary = (
+                all_dist_df.groupby("Forrester Number")
+                .size()
+                .rename("Count")
+                .reset_index()
+            )
+            summary.index = summary["Forrester Number"]
+            st.bar_chart(summary["Count"])
 
         # --- Unreachable authors (not connected to Forrester) ---
         with st.expander(f"Unconnected authors ({n_unreachable:,} — no path to Forrester)"):
