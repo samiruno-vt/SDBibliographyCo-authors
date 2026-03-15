@@ -242,34 +242,34 @@ def plot_coauthor_network(H, center_author):
                             font=dict(size=12)),
             showlegend=False
         ))
-    
+
     # Node colors by degree level
     level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d", 3: "#8338ec", 4: "#6c757d"}
-    
+
     node_x, node_y, node_text, node_colors, node_sizes = [], [], [], [], []
     node_names = []
-    
+
     for node in H.nodes():
         x, y = pos[node]
         node_x.append(x)
         node_y.append(y)
         node_names.append(node)
-        
+
         level = H.nodes[node].get("level", 4)
-        num_papers = H.nodes[node].get("num_papers", 0)
-        num_coauthors = H.nodes[node].get("num_coauthors", 0)
-        country = H.nodes[node].get("country", "")
-        org = H.nodes[node].get("organization", "")
-        
+        num_papers = int(H.nodes[node].get("num_papers") or 0)
+        num_coauthors = int(H.nodes[node].get("num_coauthors") or 0)
+        country = H.nodes[node].get("country") or ""
+        org = H.nodes[node].get("organization") or ""
+
         hover = f"<b>{node}</b><br>Papers: {num_papers}<br>Co-authors: {num_coauthors}"
         if country:
             hover += f"<br>Country: {country}"
         if org:
             hover += f"<br>Org: {org}"
         node_text.append(hover)
-        
+
         node_colors.append(level_colors.get(level, "#6c757d"))
-        
+
         if level == 0:
             node_sizes.append(60)
         elif level == 1:
@@ -575,11 +575,11 @@ with tab1:
         node_x, node_y, node_text, node_sizes, node_colors = [], [], [], [], []
         node_names = []
         
-        papers_vals = [H.nodes[n].get("num_papers", 1) for n in H.nodes()]
+        papers_vals = [int(H.nodes[n].get("num_papers") or 1) for n in H.nodes()]
         max_papers = max(papers_vals) if papers_vals else 1
         min_papers_val = min(papers_vals) if papers_vals else 1
         
-        coauth_vals = [H.nodes[n].get("num_coauthors", 0) for n in H.nodes()]
+        coauth_vals = [int(H.nodes[n].get("num_coauthors") or 0) for n in H.nodes()]
         max_coauth = max(coauth_vals) if coauth_vals else 1
         
         for node in H.nodes():
@@ -588,10 +588,10 @@ with tab1:
             node_y.append(y)
             node_names.append(node)
             
-            num_papers = H.nodes[node].get("num_papers", 0)
-            num_coauthors = H.nodes[node].get("num_coauthors", 0)
-            country = H.nodes[node].get("country", "")
-            org = H.nodes[node].get("organization", "")
+            num_papers = int(H.nodes[node].get("num_papers") or 0)
+            num_coauthors = int(H.nodes[node].get("num_coauthors") or 0)
+            country = H.nodes[node].get("country") or ""
+            org = H.nodes[node].get("organization") or ""
             
             hover = f"<b>{node}</b><br>Papers: {num_papers}<br>Co-authors: {num_coauthors}"
             if country:
