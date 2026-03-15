@@ -213,11 +213,14 @@ def plot_coauthor_network(H, center_author):
         edge_key = f"{u}|||{v}"
         edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": weight}
 
+        # Width scaled by shared papers: 1 paper = 1px, caps at 6px
+        edge_width = min(1 + (weight - 1) * 0.5, 6)
+
         # Visible line
         edge_traces.append(go.Scatter(
             x=[x0, x1, None], y=[y0, y1, None],
             mode="lines",
-            line=dict(width=1.5, color="rgba(150,150,150,0.5)"),
+            line=dict(width=edge_width, color="rgba(150,150,150,0.5)"),
             hoverinfo="skip",
             showlegend=False
         ))
@@ -731,10 +734,15 @@ with tab2:
                         '<span style="display:inline-flex; align-items:center;">'
                         '<span style="width:12px; height:12px; border-radius:50%; background-color:#8338ec; margin-right:5px;"></span>'
                         '<span style="color:#555; font-size:13px;">3rd degree</span></span>'
-                        '<span style="color:#555; font-size:13px; margin-left:8px;">Click on an edge midpoint to see shared papers below</span>'
+                        '<span style="color:#555; font-size:13px; margin-left:8px;">Edge thickness = shared papers · Click a connection to see details below</span>'
                         '</div>'
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
+
+                    # Use a counter in session state to reset chart selection when cleared
+                    clear_key = f"coauthor_net_clear_{selected_author}"
+                    if clear_key not in st.session_state:
+                        st.session_state[clear_key] = 0
 
                     # Render chart and capture clicks
                     event = st.plotly_chart(
@@ -742,7 +750,7 @@ with tab2:
                         use_container_width=True,
                         on_select="rerun",
                         selection_mode="points",
-                        key=f"coauthor_net_{selected_author}"
+                        key=f"coauthor_net_{selected_author}_{st.session_state[clear_key]}"
                     )
 
                     # Panel: show papers for clicked edge
@@ -758,7 +766,11 @@ with tab2:
                         edata = edge_paper_lookup[clicked_key]
                         u, v = edata["u"], edata["v"]
                         papers = edata["papers"]
-                        st.markdown(f"**Shared papers: {u} & {v}**")
+                        col_title, col_clear = st.columns([6, 1])
+                        col_title.markdown(f"**Shared papers: {u} & {v}**")
+                        if col_clear.button("Clear", key=f"clear_btn_{selected_author}"):
+                            st.session_state[clear_key] += 1
+                            st.rerun()
                         if papers:
                             for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
                                 year  = p.get("year") or "?"
@@ -770,7 +782,7 @@ with tab2:
                                     st.markdown(f"- {title} ({year})")
                         else:
                             st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
-                    elif not clicked_key:
+                    else:
                         st.caption("Click on a connection line (midpoint) to see the shared papers between two authors.")
                 else:
                     st.info("No co-author network to display.")
