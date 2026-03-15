@@ -173,14 +173,29 @@ def build_coauthor_network(G, author, max_degree=2):
     return H
 
 
+def _format_edge_hover(u, v, papers):
+    """Build the hover text for an edge between two co-authors."""
+    lines = [f"<b>{u}</b> & <b>{v}</b>", f"{len(papers)} shared paper(s):<br>"]
+    for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
+        year  = p.get("year") or "?"
+        title = p.get("title") or "(no title)"
+        link  = p.get("link")
+        if len(title) > 80:
+            title = title[:77] + "\u2026"
+        if link:
+            lines.append(f"\u2022 <a href='{link}' target='_blank'>{title}</a> ({year})")
+        else:
+            lines.append(f"\u2022 {title} ({year})")
+    return "<br>".join(lines)
+
+
 def plot_coauthor_network(H, center_author):
     """Create Plotly figure for co-author network."""
     if H.number_of_nodes() == 0:
         return None
-    
+
     n = H.number_of_nodes()
-    
-    # Adjust iterations based on graph size - fewer for large graphs
+
     if n > 500:
         iterations = 50
     elif n > 200:
@@ -189,26 +204,44 @@ def plot_coauthor_network(H, center_author):
         iterations = 150
     else:
         iterations = 200
-    
+
     k = 6 / np.sqrt(n) if n > 1 else 1
     pos = nx.spring_layout(H, seed=42, k=k, iterations=iterations, scale=3)
-    
-    # Edge traces - combine into single trace for better performance
-    edge_x = []
-    edge_y = []
+
+    # One visible line + one invisible midpoint marker per edge.
+    # The midpoint marker carries the hover tooltip (easier to hit than a thin line).
+    edge_traces = []
     for u, v in H.edges():
         x0, y0 = pos[u]
         x1, y1 = pos[v]
-        edge_x.extend([x0, x1, None])
-        edge_y.extend([y0, y1, None])
-    
-    edge_trace = go.Scatter(
-        x=edge_x, y=edge_y,
-        mode="lines",
-        line=dict(width=1, color="rgba(150,150,150,0.5)"),
-        hoverinfo="skip",
-        showlegend=False
-    )
+        xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+
+        papers = H[u][v].get("papers", [])
+        if papers:
+            hover_text = _format_edge_hover(u, v, papers)
+        else:
+            weight = H[u][v].get("weight", 1)
+            hover_text = f"<b>{u}</b> & <b>{v}</b><br>{weight} shared paper(s)"
+
+        # Visible thin line (no hover)
+        edge_traces.append(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            mode="lines",
+            line=dict(width=1.5, color="rgba(150,150,150,0.5)"),
+            hoverinfo="skip",
+            showlegend=False
+        ))
+        # Invisible dot at midpoint that shows the tooltip
+        edge_traces.append(go.Scatter(
+            x=[xm], y=[ym],
+            mode="markers",
+            marker=dict(size=12, color="rgba(0,0,0,0)", line=dict(width=0)),
+            hoverinfo="text",
+            hovertext=hover_text,
+            hoverlabel=dict(bgcolor="white", bordercolor="#aaa",
+                            font=dict(size=12)),
+            showlegend=False
+        ))
     
     # Node colors by degree level
     level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d", 3: "#8338ec", 4: "#6c757d"}
@@ -264,7 +297,7 @@ def plot_coauthor_network(H, center_author):
         showlegend=False
     )
     
-    fig = go.Figure(data=[edge_trace, node_trace])
+    fig = go.Figure(data=edge_traces + [node_trace])
     fig.update_layout(
         showlegend=False,
         plot_bgcolor="#f8f9fa",
@@ -699,7 +732,7 @@ with tab2:
                         '<span style="display:inline-flex; align-items:center;">'
                         '<span style="width:12px; height:12px; border-radius:50%; background-color:#8338ec; margin-right:5px;"></span>'
                         '<span style="color:#555; font-size:13px;">3rd degree</span></span>'
-                        '<span style="color:#555; font-size:13px; margin-left:8px;">Hover over edges to see paper details</span>'
+                        '<span style="color:#555; font-size:13px; margin-left:8px;">💡 Hover over edge midpoints to see shared papers (with links where available)</span>'
                         '</div>'
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
