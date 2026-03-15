@@ -391,7 +391,7 @@ st.caption(f"Exploring **{len(df):,}** papers and **{G.number_of_nodes():,}** au
 # Tab Navigation
 # =============================================================================
 
-tab1, tab2, tab3 = st.tabs(["Authors", "Co-authors", "Forrester Number"])
+tab1, tab2, tab3, tab4 = st.tabs(["Authors", "Co-authors", "Forrester Number", "Browse by Distance"])
 
 
 # =============================================================================
@@ -910,6 +910,169 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
     )
 
     return fig
+
+
+# =============================================================================
+# Precompute all Forrester distances (cached)
+# =============================================================================
+
+@st.cache_data
+def get_all_forrester_distances(_G, reference_node):
+    """
+    BFS from reference_node to get shortest path distance for every reachable node.
+    Returns a dict: author -> distance
+    """
+    return nx.single_source_shortest_path_length(_G, reference_node)
+
+
+with tab4:
+    st.header("Browse by Distance from Forrester")
+    st.markdown(
+        "All authors in the network, grouped by their **Forrester Number** "
+        "(degrees of co-authorship separation from Jay Wright Forrester). "
+        "Use this to browse and verify the data."
+    )
+
+    # Find reference node
+    reference_node_tab4 = None
+    for node in G.nodes():
+        if normalize_author_name(REFERENCE_AUTHOR) == normalize_author_name(node):
+            reference_node_tab4 = node
+            break
+
+    if reference_node_tab4 is None:
+        st.error(f"**{REFERENCE_AUTHOR}** not found in the co-author network.")
+    else:
+        # Compute all distances
+        dist_map = get_all_forrester_distances(G, reference_node_tab4)
+
+        # Build a flat DataFrame of all reachable authors with their distance
+        excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
+        rows = []
+        for author, dist in dist_map.items():
+            if author in excluded or len(author) <= 2:
+                continue
+            node_data = G.nodes[author]
+            rows.append({
+                "Author": author,
+                "Forrester Number": dist,
+                "Papers": node_data.get("num_papers", 0),
+                "Co-authors": node_data.get("num_coauthors", 0),
+                "Country": node_data.get("country") or "",
+                "Organization": node_data.get("organization") or "",
+            })
+
+        all_dist_df = pd.DataFrame(rows).sort_values(
+            ["Forrester Number", "Papers"], ascending=[True, False]
+        ).reset_index(drop=True)
+
+        max_dist = int(all_dist_df["Forrester Number"].max())
+        n_reachable = len(all_dist_df)
+        n_unreachable = G.number_of_nodes() - len(dist_map)
+
+        st.caption(
+            f"**{n_reachable:,}** authors reachable from Forrester · "
+            f"**{n_unreachable:,}** not connected · "
+            f"Max distance: **{max_dist}**"
+        )
+
+        st.divider()
+
+        # --- Controls ---
+        col_dist, col_search, col_country2, col_org2 = st.columns([1, 2, 1, 1])
+
+        with col_dist:
+            dist_options = ["All"] + list(range(0, max_dist + 1))
+            selected_dist = st.selectbox(
+                "Forrester Number",
+                options=dist_options,
+                index=0,
+                key="browse_dist"
+            )
+
+        with col_search:
+            name_filter = st.text_input("Filter by name", key="browse_name")
+
+        with col_country2:
+            country_filter = st.multiselect(
+                "Country",
+                options=all_countries,
+                default=[],
+                key="browse_country"
+            )
+
+        with col_org2:
+            org_filter = st.multiselect(
+                "Organization",
+                options=all_orgs,
+                default=[],
+                key="browse_org"
+            )
+
+        # Apply filters
+        view_df = all_dist_df.copy()
+
+        if selected_dist != "All":
+            view_df = view_df[view_df["Forrester Number"] == int(selected_dist)]
+
+        if name_filter.strip():
+            view_df = view_df[
+                view_df["Author"].str.contains(name_filter.strip(), case=False, na=False)
+            ]
+
+        if country_filter:
+            view_df = view_df[view_df["Country"].isin(country_filter)]
+
+        if org_filter:
+            view_df = view_df[view_df["Organization"].isin(org_filter)]
+
+        st.caption(f"Showing **{len(view_df):,}** authors")
+
+        # --- Summary counts by distance ---
+        if selected_dist == "All":
+            st.subheader("Authors per Forrester Number")
+            summary = (
+                all_dist_df.groupby("Forrester Number")
+                .size()
+                .rename("Count")
+                .reset_index()
+            )
+            summary.index = summary["Forrester Number"]
+            st.bar_chart(summary["Count"])
+
+        st.divider()
+
+        # --- Main table ---
+        if selected_dist == "All":
+            st.subheader("All Authors by Distance")
+        else:
+            st.subheader(f"Forrester Number {selected_dist}")
+
+        display_df = view_df[["Forrester Number", "Author", "Papers", "Co-authors", "Country", "Organization"]].copy()
+        display_df.index = range(1, len(display_df) + 1)
+        st.dataframe(display_df, use_container_width=True, height=600)
+
+        # --- Unreachable authors (not connected to Forrester) ---
+        with st.expander(f"Unconnected authors ({n_unreachable:,} — no path to Forrester)"):
+            unreachable_rows = []
+            reachable_set = set(dist_map.keys())
+            for node in G.nodes():
+                if node not in reachable_set and node not in excluded and len(node) > 2:
+                    nd = G.nodes[node]
+                    unreachable_rows.append({
+                        "Author": node,
+                        "Papers": nd.get("num_papers", 0),
+                        "Co-authors": nd.get("num_coauthors", 0),
+                        "Country": nd.get("country") or "",
+                        "Organization": nd.get("organization") or "",
+                    })
+            if unreachable_rows:
+                unreach_df = pd.DataFrame(unreachable_rows).sort_values(
+                    "Papers", ascending=False
+                ).reset_index(drop=True)
+                unreach_df.index = range(1, len(unreach_df) + 1)
+                st.caption("These authors have no co-authorship path to Jay Wright Forrester in the dataset.")
+                st.dataframe(unreach_df, use_container_width=True, height=400)
 
 
 with tab3:
