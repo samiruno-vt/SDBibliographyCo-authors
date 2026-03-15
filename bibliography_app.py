@@ -716,25 +716,82 @@ with tab2:
 REFERENCE_AUTHOR = "Jay Wright Forrester"
 
 
+def _minimize_crossings(nodes_by_level, edges_set):
+    """
+    Reorder nodes within each level (below level 0) to reduce edge crossings.
+    Uses a simple barycenter heuristic: sort each level's nodes by the average
+    x-position of their neighbours in the level above.
+    Returns a new nodes_by_level dict with reordered lists.
+    """
+    # Start with a temporary uniform x assignment for level 0
+    result = {}
+    num_levels = max(nodes_by_level.keys()) + 1
+    max_w = max(len(v) for v in nodes_by_level.values())
+    chart_width = max(max_w * 3.0, 6.0)
+
+    # Assign initial positions top-down
+    temp_x = {}
+    for lvl in sorted(nodes_by_level.keys()):
+        nodes = list(nodes_by_level[lvl])
+        n = len(nodes)
+        if n == 1:
+            xs = [chart_width / 2]
+        else:
+            xs = [chart_width * i / (n - 1) for i in range(n)]
+        for node, x in zip(nodes, xs):
+            temp_x[node] = x
+        result[lvl] = nodes
+
+    # Build adjacency: node -> neighbours in adjacent levels
+    adj = defaultdict(set)
+    for u, v in edges_set:
+        adj[u].add(v)
+        adj[v].add(u)
+
+    # Barycenter sweep: top-down
+    for lvl in range(1, num_levels):
+        if lvl not in nodes_by_level:
+            continue
+        nodes = result[lvl]
+        scores = []
+        for node in nodes:
+            neighbours_above = [nb for nb in adj[node] if nb in temp_x]
+            if neighbours_above:
+                bary = sum(temp_x[nb] for nb in neighbours_above) / len(neighbours_above)
+            else:
+                bary = temp_x.get(node, chart_width / 2)
+            scores.append((bary, node))
+        scores.sort()
+        reordered = [node for _, node in scores]
+        result[lvl] = reordered
+        # Update temp_x for this level
+        n = len(reordered)
+        if n == 1:
+            xs = [chart_width / 2]
+        else:
+            xs = [chart_width * i / (n - 1) for i in range(n)]
+        for node, x in zip(reordered, xs):
+            temp_x[node] = x
+
+    return result
+
+
 def plot_forrester_path_tree(all_paths, reference_node, selected_author):
     """
     Draw a top-down family tree showing only the nodes involved in the
     shortest path(s) from Jay Forrester down to the selected author.
-
     Jay Forrester is at the top (level 0). Each row below is one hop further.
-    All nodes in any of the paths are shown, organised by their distance
-    from Jay Forrester (i.e. their Forrester Number).
+    Nodes within each level are reordered to minimise edge crossings.
     """
     if not all_paths:
         return None
 
-    # Collect unique nodes per level across all paths
+    # Collect unique nodes per level and edges across all paths
     nodes_by_level = defaultdict(set)
     edges_set = set()
 
     for path in all_paths:
-        # path goes: selected_author → ... → reference_node
-        # Reverse so Jay is level 0
+        # paths go selected_author → ... → reference_node; reverse so Jay = level 0
         reversed_path = list(reversed(path))
         for i, node in enumerate(reversed_path):
             nodes_by_level[i].add(node)
@@ -742,14 +799,16 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
             u, v = reversed_path[i], reversed_path[i + 1]
             edges_set.add((u, v))
 
-    # Sort nodes within each level alphabetically for a stable layout
+    # Initial alphabetical sort before crossing-reduction
     nodes_by_level = {lvl: sorted(nodes) for lvl, nodes in nodes_by_level.items()}
-    num_levels = len(nodes_by_level)
 
-    # Assign positions: levels go top → bottom, nodes spread horizontally
+    # Reorder to minimise crossings
+    nodes_by_level = _minimize_crossings(nodes_by_level, edges_set)
+
+    num_levels = len(nodes_by_level)
     max_nodes_in_level = max(len(nodes) for nodes in nodes_by_level.values())
     chart_width = max(max_nodes_in_level * 3.0, 6.0)
-    y_gap = 3.5
+    y_gap = 4.5  # more vertical breathing room between levels
 
     node_pos = {}
     for lvl, nodes in nodes_by_level.items():
@@ -763,12 +822,12 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
             node_pos[node] = (x, y)
 
     level_colors = {
-        0: "#d4a017",   # gold — Jay
-        1: "#2a9d8f",   # teal
-        2: "#457b9d",   # blue
-        3: "#8338ec",   # purple
-        4: "#e76f51",   # orange
-        5: "#6c757d",   # grey
+        0: "#d4a017",
+        1: "#2a9d8f",
+        2: "#457b9d",
+        3: "#8338ec",
+        4: "#e76f51",
+        5: "#6c757d",
         6: "#adb5bd",
     }
 
@@ -787,7 +846,7 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
     traces.append(go.Scatter(
         x=edge_x, y=edge_y,
         mode="lines",
-        line=dict(width=2.5, color="rgba(120,120,120,0.55)"),
+        line=dict(width=2.5, color="rgba(120,120,120,0.5)"),
         hoverinfo="skip",
         showlegend=False
     ))
@@ -795,12 +854,6 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
     # Nodes
     node_x, node_y, node_labels, node_hover = [], [], [], []
     node_colors, node_sizes, node_borders = [], [], []
-
-    # Build a lookup: node -> its Forrester Number (= level in this tree)
-    node_level = {}
-    for lvl, nodes in nodes_by_level.items():
-        for node in nodes:
-            node_level[node] = lvl
 
     for lvl, nodes in nodes_by_level.items():
         for node in nodes:
@@ -840,12 +893,19 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
         showlegend=False
     ))
 
-    # Left-margin level annotations
+    # Left-margin annotations with descriptive labels
+    level_label_suffix = {
+        1: " — direct co-author",
+    }
     annotations = []
     for lvl in sorted(nodes_by_level.keys()):
         nodes_in_lvl = nodes_by_level[lvl]
         _, y = node_pos[nodes_in_lvl[0]]
-        label = "Jay Forrester" if lvl == 0 else f"#{lvl}"
+        if lvl == 0:
+            label = "Jay Forrester"
+        else:
+            suffix = level_label_suffix.get(lvl, "")
+            label = f"#{lvl}{suffix}"
         annotations.append(dict(
             x=-0.8, y=y,
             text=f"<b>{label}</b>",
@@ -854,17 +914,17 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
             xanchor="right"
         ))
 
-    fig_height = max(350, num_levels * 160)
+    fig_height = max(380, num_levels * 190)
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         showlegend=False,
         plot_bgcolor="#f8f9fa",
         paper_bgcolor="#f8f9fa",
-        margin=dict(l=100, r=30, t=30, b=30),
+        margin=dict(l=130, r=30, t=30, b=30),
         height=fig_height,
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   range=[-1.5, chart_width + 1]),
+                   range=[-2, chart_width + 1]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         annotations=annotations,
         dragmode="pan",
@@ -953,6 +1013,13 @@ with tab3:
                             fig = plot_forrester_path_tree(all_paths, reference_in_graph, selected_author_tab3)
                             if fig:
                                 st.plotly_chart(fig, use_container_width=True)
+                                st.caption(
+                                    "**How to read this:** Jay Wright Forrester is at the top. "
+                                    "Each row below represents one additional degree of separation. "
+                                    "Lines connect co-authors. Where multiple paths exist, "
+                                    "shared intermediaries appear once with lines converging into them. "
+                                    "Hover over any node for details."
+                                )
 
                         except Exception as e:
                             st.error(f"Error finding path: {str(e)}")
