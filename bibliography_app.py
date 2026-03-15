@@ -715,208 +715,156 @@ with tab2:
 
 REFERENCE_AUTHOR = "Jay Wright Forrester"
 
-# Pre-compute all Forrester numbers via BFS from Jay Forrester
-@st.cache_data
-def compute_forrester_numbers(_G, reference_node):
+
+def plot_forrester_path_tree(all_paths, reference_node, selected_author):
     """
-    BFS from reference_node to compute shortest path length (Forrester Number)
-    for every reachable node. Returns dict: node -> forrester_number.
+    Draw a top-down family tree showing only the nodes involved in the
+    shortest path(s) from Jay Forrester down to the selected author.
+
+    Jay Forrester is at the top (level 0). Each row below is one hop further.
+    All nodes in any of the paths are shown, organised by their distance
+    from Jay Forrester (i.e. their Forrester Number).
     """
-    return nx.single_source_shortest_path_length(_G, reference_node)
-
-
-@st.cache_data
-def build_forrester_tree_data(_G, reference_node, max_level=6):
-    """
-    Build node/edge data for the family-tree visualization.
-    Returns nodes_by_level (dict level -> list of node names) and edges list.
-    Only includes nodes reachable within max_level hops.
-    """
-    distances = compute_forrester_numbers(_G, reference_node)
-
-    nodes_by_level = defaultdict(list)
-    for node, dist in distances.items():
-        if dist <= max_level:
-            nodes_by_level[dist].append(node)
-
-    # Sort each level alphabetically for a stable layout
-    for lvl in nodes_by_level:
-        nodes_by_level[lvl].sort()
-
-    # Edges: only between adjacent levels (parent -> child in BFS tree)
-    # We use the BFS tree edges so each child connects to exactly one parent
-    bfs_tree = nx.bfs_tree(_G, reference_node)
-    edges = [(u, v) for u, v in bfs_tree.edges()
-             if distances.get(u, 999) < max_level and distances.get(v, 999) <= max_level]
-
-    return dict(nodes_by_level), edges, distances
-
-
-def plot_forrester_family_tree(nodes_by_level, edges, distances, highlight_node=None,
-                                highlight_path=None, reference_node=None):
-    """
-    Draw a top-down family tree with Jay Forrester at the top.
-    Each row = one Forrester number level.
-    Nodes are spread horizontally; edges connect parent to children.
-    """
-    if not nodes_by_level:
+    if not all_paths:
         return None
 
-    # Assign x positions within each level (evenly spaced, centred)
+    # Collect unique nodes per level across all paths
+    nodes_by_level = defaultdict(set)
+    edges_set = set()
+
+    for path in all_paths:
+        # path goes: selected_author → ... → reference_node
+        # Reverse so Jay is level 0
+        reversed_path = list(reversed(path))
+        for i, node in enumerate(reversed_path):
+            nodes_by_level[i].add(node)
+        for i in range(len(reversed_path) - 1):
+            u, v = reversed_path[i], reversed_path[i + 1]
+            edges_set.add((u, v))
+
+    # Sort nodes within each level alphabetically for a stable layout
+    nodes_by_level = {lvl: sorted(nodes) for lvl, nodes in nodes_by_level.items()}
+    num_levels = len(nodes_by_level)
+
+    # Assign positions: levels go top → bottom, nodes spread horizontally
+    max_nodes_in_level = max(len(nodes) for nodes in nodes_by_level.values())
+    chart_width = max(max_nodes_in_level * 3.0, 6.0)
+    y_gap = 3.5
+
     node_pos = {}
-    max_nodes_in_level = max(len(v) for v in nodes_by_level.values())
-    # Chart width in data units
-    chart_width = max(max_nodes_in_level * 2.0, 10.0)
-
-    level_colors = {
-        0: "#d4a017",   # gold for Jay
-        1: "#2a9d8f",   # teal
-        2: "#457b9d",   # blue
-        3: "#8338ec",   # purple
-        4: "#e76f51",   # orange
-        5: "#6c757d",   # grey
-        6: "#adb5bd",   # light grey
-    }
-
     for lvl, nodes in nodes_by_level.items():
         n = len(nodes)
         if n == 1:
             xs = [chart_width / 2]
         else:
             xs = [chart_width * i / (n - 1) for i in range(n)]
-        y = -lvl * 3.5  # levels go downward
+        y = -lvl * y_gap
         for node, x in zip(nodes, xs):
             node_pos[node] = (x, y)
 
-    # --- Edges ---
-    highlight_set = set(highlight_path) if highlight_path else set()
+    level_colors = {
+        0: "#d4a017",   # gold — Jay
+        1: "#2a9d8f",   # teal
+        2: "#457b9d",   # blue
+        3: "#8338ec",   # purple
+        4: "#e76f51",   # orange
+        5: "#6c757d",   # grey
+        6: "#adb5bd",
+    }
 
-    edge_x_dim, edge_y_dim = [], []   # dimmed edges
-    edge_x_hi,  edge_y_hi  = [], []   # highlighted edges
+    traces = []
 
-    for u, v in edges:
+    # Edges
+    edge_x, edge_y = [], []
+    for u, v in edges_set:
         if u not in node_pos or v not in node_pos:
             continue
         x0, y0 = node_pos[u]
         x1, y1 = node_pos[v]
-        if highlight_set and u in highlight_set and v in highlight_set:
-            edge_x_hi.extend([x0, x1, None])
-            edge_y_hi.extend([y0, y1, None])
-        else:
-            edge_x_dim.extend([x0, x1, None])
-            edge_y_dim.extend([y0, y1, None])
-
-    traces = []
+        edge_x.extend([x0, x1, None])
+        edge_y.extend([y0, y1, None])
 
     traces.append(go.Scatter(
-        x=edge_x_dim, y=edge_y_dim,
+        x=edge_x, y=edge_y,
         mode="lines",
-        line=dict(width=0.8, color="rgba(180,180,180,0.4)"),
+        line=dict(width=2.5, color="rgba(120,120,120,0.55)"),
         hoverinfo="skip",
         showlegend=False
     ))
 
-    if edge_x_hi:
-        traces.append(go.Scatter(
-            x=edge_x_hi, y=edge_y_hi,
-            mode="lines",
-            line=dict(width=3, color="#d62828"),
-            hoverinfo="skip",
-            showlegend=False
-        ))
-
-    # --- Nodes ---
-    node_x, node_y = [], []
-    node_text, node_hover = [], []
+    # Nodes
+    node_x, node_y, node_labels, node_hover = [], [], [], []
     node_colors, node_sizes, node_borders = [], [], []
+
+    # Build a lookup: node -> its Forrester Number (= level in this tree)
+    node_level = {}
+    for lvl, nodes in nodes_by_level.items():
+        for node in nodes:
+            node_level[node] = lvl
 
     for lvl, nodes in nodes_by_level.items():
         for node in nodes:
             x, y = node_pos[node]
             node_x.append(x)
             node_y.append(y)
+            node_labels.append(node)
+            node_hover.append(f"<b>{node}</b><br>Forrester Number: {lvl}")
 
-            fn = distances.get(node, lvl)
-            label = node if lvl <= 2 else ""  # only label top 2 levels always
-
-            hover = f"<b>{node}</b><br>Forrester Number: {fn}"
-            node_text.append(node)
-            node_hover.append(hover)
-
-            # Colour & size
-            base_color = level_colors.get(lvl, "#adb5bd")
-
-            if node == highlight_node:
+            if node == selected_author:
                 node_colors.append("#d62828")
-                node_sizes.append(22)
+                node_sizes.append(20)
                 node_borders.append("#8b0000")
             elif node == reference_node:
                 node_colors.append("#d4a017")
-                node_sizes.append(22)
-                node_borders.append("#8b6914")
-            elif highlight_set and node in highlight_set:
-                node_colors.append("#d62828")
+                node_sizes.append(20)
+                node_borders.append("#7a5200")
+            else:
+                node_colors.append(level_colors.get(lvl, "#6c757d"))
                 node_sizes.append(16)
-                node_borders.append("#8b0000")
-            else:
-                node_colors.append(base_color)
-                node_sizes.append(10 if lvl >= 3 else 14)
                 node_borders.append("white")
-
-    # Show text labels for nodes that should have them
-    node_display_text = []
-    for lvl, nodes in nodes_by_level.items():
-        for node in nodes:
-            if node == highlight_node or node == reference_node or (highlight_set and node in highlight_set):
-                node_display_text.append(node)
-            elif lvl <= 1:
-                node_display_text.append(node)
-            else:
-                node_display_text.append("")
 
     traces.append(go.Scatter(
         x=node_x, y=node_y,
         mode="markers+text",
-        text=node_display_text,
+        text=node_labels,
         textposition="top center",
-        textfont=dict(size=9, color="#222222"),
+        textfont=dict(size=11, color="#222222"),
         hoverinfo="text",
         hovertext=node_hover,
         marker=dict(
             size=node_sizes,
             color=node_colors,
-            line=dict(width=1.5, color=node_borders),
-            opacity=0.92
+            line=dict(width=2, color=node_borders),
+            opacity=0.95
         ),
         showlegend=False
     ))
 
-    # --- Level annotations on left margin ---
+    # Left-margin level annotations
     annotations = []
     for lvl in sorted(nodes_by_level.keys()):
-        _, y = node_pos[nodes_by_level[lvl][0]]
-        label = f"#{lvl}" if lvl > 0 else "Jay\nForrester"
+        nodes_in_lvl = nodes_by_level[lvl]
+        _, y = node_pos[nodes_in_lvl[0]]
+        label = "Jay Forrester" if lvl == 0 else f"#{lvl}"
         annotations.append(dict(
-            x=-1.2, y=y,
+            x=-0.8, y=y,
             text=f"<b>{label}</b>",
             showarrow=False,
             font=dict(size=11, color="#555555"),
             xanchor="right"
         ))
 
-    # Compute figure height based on number of levels
-    num_levels = len(nodes_by_level)
-    fig_height = max(500, num_levels * 130)
+    fig_height = max(350, num_levels * 160)
 
     fig = go.Figure(data=traces)
     fig.update_layout(
         showlegend=False,
         plot_bgcolor="#f8f9fa",
         paper_bgcolor="#f8f9fa",
-        margin=dict(l=80, r=20, t=30, b=20),
+        margin=dict(l=100, r=30, t=30, b=30),
         height=fig_height,
         xaxis=dict(showgrid=False, zeroline=False, showticklabels=False,
-                   range=[-2, chart_width + 1]),
+                   range=[-1.5, chart_width + 1]),
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         annotations=annotations,
         dragmode="pan",
@@ -931,14 +879,11 @@ with tab3:
 
     st.markdown(
         f"""
-        The **Forrester Number** measures degrees of co-authorship separation from **{REFERENCE_AUTHOR}**.
+        Find your **Forrester Number** — the degrees of co-authorship separation from **{REFERENCE_AUTHOR}**.
 
-        - **Forrester Number 0**: Jay Wright Forrester himself
-        - **Forrester Number 1**: Co-authored directly with {REFERENCE_AUTHOR}
-        - **Forrester Number 2**: Co-authored with a Number 1 author
+        - **Forrester Number 1**: You co-authored a paper directly with {REFERENCE_AUTHOR}
+        - **Forrester Number 2**: You co-authored with someone who co-authored with {REFERENCE_AUTHOR}
         - And so on…
-
-        The family tree below shows all authors organised by their Forrester Number.
         """
     )
 
@@ -958,29 +903,7 @@ with tab3:
             f"{info.get('num_coauthors', 0)} direct co-authors in the database."
         )
 
-        # Pre-compute the full tree
-        max_level = st.slider("Levels to display", min_value=1, max_value=8, value=4,
-                              help="How many Forrester Number levels to show in the tree")
-
-        nodes_by_level, tree_edges, distances = build_forrester_tree_data(
-            G, reference_in_graph, max_level=max_level
-        )
-
-        # Summary counts
-        level_counts = {lvl: len(nodes) for lvl, nodes in nodes_by_level.items()}
-        cols_summary = st.columns(min(len(level_counts), 7))
-        for i, (lvl, count) in enumerate(sorted(level_counts.items())):
-            label = "Jay Forrester" if lvl == 0 else f"Number {lvl}"
-            cols_summary[i % len(cols_summary)].metric(label, f"{count:,}")
-
-        st.divider()
-
-        # --- Optional: search to highlight an author ---
-        author_query_tab3 = st.text_input("Search for an author to highlight in the tree", key="forrester_search")
-
-        highlight_node = None
-        highlight_path = []
-        forrester_result_shown = False
+        author_query_tab3 = st.text_input("Search for an author", key="forrester_search")
 
         if author_query_tab3:
             candidates = search_authors(author_query_tab3, all_authors_sorted, limit=10, score_cutoff=60)
@@ -992,87 +915,47 @@ with tab3:
                 selected_author_tab3 = st.radio("Select an author:", options=author_names_tab3, key="forrester_select")
 
                 if selected_author_tab3:
+                    st.markdown("---")
+
                     if selected_author_tab3 == reference_in_graph:
                         st.success(f"🎉 **{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
-                        highlight_node = reference_in_graph
-                    elif selected_author_tab3 not in distances:
+
+                    elif not nx.has_path(G, selected_author_tab3, reference_in_graph):
                         st.warning(
                             f"⚠️ **{selected_author_tab3}** is not connected to {REFERENCE_AUTHOR} "
                             "in the co-author network."
                         )
+
                     else:
-                        fn = distances[selected_author_tab3]
-                        st.success(f"**{selected_author_tab3}** has a Forrester Number of **{fn}**")
+                        try:
+                            forrester_number = nx.shortest_path_length(G, selected_author_tab3, reference_in_graph)
+                            st.success(f"**{selected_author_tab3}** has a Forrester Number of **{forrester_number}**")
 
-                        # Show shortest path(s) as text
-                        all_paths = []
-                        for i, path in enumerate(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph)):
-                            all_paths.append(path)
-                            if i >= 9:
-                                break
+                            # Collect up to 10 shortest paths
+                            all_paths = []
+                            for i, path in enumerate(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph)):
+                                all_paths.append(path)
+                                if i >= 9:
+                                    break
 
-                        if len(all_paths) == 1:
-                            st.markdown(f"**Path to {REFERENCE_AUTHOR}:**")
-                        else:
-                            st.markdown(f"**{len(all_paths)} shortest paths to {REFERENCE_AUTHOR}:**")
+                            if len(all_paths) == 1:
+                                st.markdown(f"**Path to {REFERENCE_AUTHOR}:**")
+                            else:
+                                st.markdown(f"**{len(all_paths)} shortest paths to {REFERENCE_AUTHOR}:**")
 
-                        for path in all_paths:
-                            st.markdown("- " + " → ".join(path))
+                            for path in all_paths:
+                                st.markdown("- " + " → ".join(path))
 
-                        # Use the first path for highlighting
-                        highlight_node = selected_author_tab3
-                        highlight_path = all_paths[0] if all_paths else []
+                            # Family tree visualization
+                            st.markdown("---")
+                            st.subheader("Path Tree")
 
-                        # Expand levels if needed so the node is visible
-                        if fn > max_level:
-                            st.info(
-                                f"ℹ️ **{selected_author_tab3}** has Forrester Number **{fn}**, "
-                                f"which is beyond the current display level ({max_level}). "
-                                "Increase the levels slider above to see them in the tree."
-                            )
+                            fig = plot_forrester_path_tree(all_paths, reference_in_graph, selected_author_tab3)
+                            if fig:
+                                st.plotly_chart(fig, use_container_width=True)
 
-        # --- Family tree chart ---
-        st.subheader("Family Tree")
-
-        # Legend
-        legend_html = (
-            '<div style="display:flex; align-items:center; gap:20px; margin-bottom:10px; flex-wrap:wrap;">'
-            '<span style="display:inline-flex; align-items:center;">'
-            '<span style="width:12px; height:12px; border-radius:50%; background-color:#d4a017; margin-right:5px;"></span>'
-            '<span style="color:#555; font-size:13px;">Jay Forrester (0)</span></span>'
-            '<span style="display:inline-flex; align-items:center;">'
-            '<span style="width:12px; height:12px; border-radius:50%; background-color:#2a9d8f; margin-right:5px;"></span>'
-            '<span style="color:#555; font-size:13px;">Number 1</span></span>'
-            '<span style="display:inline-flex; align-items:center;">'
-            '<span style="width:12px; height:12px; border-radius:50%; background-color:#457b9d; margin-right:5px;"></span>'
-            '<span style="color:#555; font-size:13px;">Number 2</span></span>'
-            '<span style="display:inline-flex; align-items:center;">'
-            '<span style="width:12px; height:12px; border-radius:50%; background-color:#8338ec; margin-right:5px;"></span>'
-            '<span style="color:#555; font-size:13px;">Number 3+</span></span>'
-            '<span style="display:inline-flex; align-items:center;">'
-            '<span style="width:12px; height:12px; border-radius:50%; background-color:#d62828; margin-right:5px;"></span>'
-            '<span style="color:#555; font-size:13px;">Selected author / path</span></span>'
-            '</div>'
-        )
-        st.markdown(legend_html, unsafe_allow_html=True)
-
-        fig = plot_forrester_family_tree(
-            nodes_by_level, tree_edges, distances,
-            highlight_node=highlight_node,
-            highlight_path=highlight_path,
-            reference_node=reference_in_graph
-        )
-
-        if fig:
-            total_shown = sum(len(v) for v in nodes_by_level.values())
-            st.caption(
-                f"Showing **{total_shown:,}** authors across **{len(nodes_by_level)}** levels. "
-                "Hover over any node to see the author name and Forrester Number. "
-                "Names are labelled at levels 0–1; hover to identify others."
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.info("No tree data to display.")
+                        except Exception as e:
+                            st.error(f"Error finding path: {str(e)}")
 
 
 
