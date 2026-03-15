@@ -588,7 +588,7 @@ with tab1:
             node_y.append(y)
             node_names.append(node)
             
-            num_papers = int(H.nodes[node].get("num_papers") or 0)
+            num_papers = int(H.nodes[node].get("num_papers") or 1)
             num_coauthors = int(H.nodes[node].get("num_coauthors") or 0)
             country = H.nodes[node].get("country") or ""
             org = H.nodes[node].get("organization") or ""
@@ -603,6 +603,7 @@ with tab1:
             # Size by papers
             if max_papers > min_papers_val:
                 norm = (num_papers - min_papers_val) / (max_papers - min_papers_val)
+                norm = max(0.0, min(1.0, norm))  # clamp to [0, 1]
             else:
                 norm = 0.5
             node_sizes.append(float(15 + norm ** 0.5 * 65))
