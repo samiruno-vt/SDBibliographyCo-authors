@@ -630,7 +630,7 @@ else:
 # =============================================================================
 
 tab1, tab2, tab3, tab_pf, tab_on = st.tabs(
-    ["Authors", "Co-authors", "Forrester Number", "Author Connections",
+    ["Authors", "Co-authors", "Forrester Number", "Author Distance",
      "Organization Network"]
 )
 
@@ -1216,11 +1216,11 @@ with tab3:
 
     st.markdown(
         f"""
-        Find your **Forrester Number** — the degrees of co-authorship separation from **{REFERENCE_AUTHOR}**.
+        Find your Forrester Number — the degrees of co-authorship separation from {REFERENCE_AUTHOR}.
 
-        - **Forrester Number 1**: You co-authored a paper directly with {REFERENCE_AUTHOR}
-        - **Forrester Number 2**: You co-authored with someone who co-authored with {REFERENCE_AUTHOR}
-        - And so on…
+        - Forrester Number 1: You co-authored a paper directly with {REFERENCE_AUTHOR}
+        - Forrester Number 2: You co-authored with someone who co-authored with {REFERENCE_AUTHOR}
+        - And so on
         """
     )
 
@@ -1310,10 +1310,9 @@ with tab3:
 # =============================================================================
 
 with tab_pf:
-    st.header("Author Connections")
+    st.header("Author Distance")
     st.markdown(
-        "Find the **co-authorship distance** and the shortest path(s) between **any two "
-        "authors** — the general case of the Forrester Number."
+        "Find the co-authorship distance and the shortest path(s) between any two authors."
     )
 
     col_a, col_b = st.columns(2)
