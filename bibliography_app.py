@@ -64,11 +64,13 @@ def search_authors(query, all_authors, limit=10, score_cutoff=60):
     exact_matches.sort(key=lambda x: (-x[1], x[0]))
     
     if exact_matches:
-        return exact_matches[:limit]
+        # keep the top `limit` by relevance, then show them alphabetically
+        return sorted(exact_matches[:limit], key=lambda x: x[0].lower())
     
     # Fall back to fuzzy matching
     fuzzy_results = process.extract(q, all_authors, scorer=fuzz.WRatio, limit=limit)
-    return [(name, score) for name, score, _ in fuzzy_results if score >= score_cutoff]
+    fuzzy = [(name, score) for name, score, _ in fuzzy_results if score >= score_cutoff]
+    return sorted(fuzzy, key=lambda x: x[0].lower())
 
 
 # =============================================================================
@@ -371,9 +373,10 @@ def search_orgs(query, org_names, limit=12, score_cutoff=60):
     exact = [(o, min(100, len(q) / max(len(o), 1) * 100 + 50)) for o in org_names if q in o.lower()]
     if exact:
         exact.sort(key=lambda x: (-x[1], x[0]))
-        return [o for o, _ in exact[:limit]]
+        # keep the top `limit` by relevance, then show them alphabetically
+        return sorted([o for o, _ in exact[:limit]], key=lambda o: o.lower())
     res = process.extract(query, org_names, scorer=fuzz.WRatio, limit=limit)
-    return [o for o, s, _ in res if s >= score_cutoff]
+    return sorted([o for o, s, _ in res if s >= score_cutoff], key=lambda o: o.lower())
 
 
 def build_org_ego(OG, center, max_degree=1):
@@ -560,31 +563,6 @@ author_org_mapping = get_author_org_mapping(author_stats)
 
 st.set_page_config(page_title="SD Bibliography Explorer", layout="wide")
 
-# --- Global scope toggle: full bibliography vs conference proceedings only ---
-with st.sidebar:
-    st.markdown("### Dataset scope")
-    conference_only = st.toggle(
-        "Conference proceedings only",
-        value=False,
-        help="Restrict every view to ISDC conference-proceedings papers and the "
-             "co-authorship network built from them.",
-    )
-    mode = "conference" if conference_only else "full"
-    st.caption(
-        "Conference papers are identified from the ISDC proceedings export "
-        "(matched by title) plus proceedings.systemdynamics.org links."
-    )
-
-if conference_only:
-    df = df_full[df_full["is_conference"]].copy()
-    G = G_conf
-else:
-    df = df_full
-    G = G_full
-
-# Author search list follows the active scope
-all_authors_sorted = get_all_authors_sorted(G, mode=mode)
-
 # Custom CSS for tab styling (matching the conference proceedings app)
 st.markdown("""
     <style>
@@ -616,6 +594,27 @@ st.markdown("""
 
 # Main title
 st.title("System Dynamics Bibliography Explorer (Demo)")
+
+# Dataset scope filter (in-page, applies to every tab)
+if "conf_only" not in st.session_state:
+    st.session_state.conf_only = False
+conference_only = st.toggle(
+    "Conference proceedings only",
+    key="conf_only",
+    help="Restrict every tab to ISDC conference-proceedings papers and the "
+         "co-authorship network built from them. Conference papers are identified "
+         "from the ISDC proceedings export plus proceedings.systemdynamics.org links.",
+)
+mode = "conference" if conference_only else "full"
+
+if conference_only:
+    df = df_full[df_full["is_conference"]].copy()
+    G = G_conf
+else:
+    df = df_full
+    G = G_full
+all_authors_sorted = get_all_authors_sorted(G, mode=mode)
+
 _scope = "Conference proceedings only" if conference_only else "Full bibliography"
 if len(df):
     st.caption(
@@ -630,9 +629,9 @@ else:
 # Tab Navigation
 # =============================================================================
 
-tab1, tab2, tab_on, tab_op, tab3, tab4 = st.tabs(
-    ["Authors", "Co-authors", "Organization Network", "Organization Papers",
-     "Forrester Number", "Browse by Distance"]
+tab1, tab2, tab3, tab_pf, tab_on = st.tabs(
+    ["Authors", "Co-authors", "Forrester Number", "Author Connections",
+     "Organization Network"]
 )
 
 
@@ -1063,7 +1062,7 @@ def _minimize_crossings(nodes_by_level, edges_set):
     return result
 
 
-def plot_forrester_path_tree(all_paths, reference_node, selected_author):
+def plot_forrester_path_tree(all_paths, reference_node, selected_author, distance_label="Forrester Number"):
     """
     Draw a top-down family tree showing only the nodes involved in the
     shortest path(s) from Jay Forrester down to the selected author.
@@ -1148,7 +1147,7 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
             node_x.append(x)
             node_y.append(y)
             node_labels.append(node)
-            node_hover.append(f"<b>{node}</b><br>Forrester Number: {lvl}")
+            node_hover.append(f"<b>{node}</b><br>{distance_label}: {lvl}")
 
             if node == selected_author:
                 node_colors.append("#d62828")
@@ -1210,156 +1209,6 @@ def get_all_forrester_distances(_G, reference_node, mode="full"):
     Returns a dict: author -> distance
     """
     return nx.single_source_shortest_path_length(_G, reference_node)
-
-
-with tab4:
-    st.header("Browse by Distance from Forrester")
-    st.markdown(
-        "All authors in the network, grouped by their **Forrester Number** "
-        "(degrees of co-authorship separation from Jay Wright Forrester). "
-        "Use this to browse and verify the data."
-    )
-
-    # Find reference node
-    reference_node_tab4 = None
-    for node in G.nodes():
-        if normalize_author_name(REFERENCE_AUTHOR) == normalize_author_name(node):
-            reference_node_tab4 = node
-            break
-
-    if reference_node_tab4 is None:
-        st.error(f"**{REFERENCE_AUTHOR}** not found in the co-author network.")
-    else:
-        # Compute all distances
-        dist_map = get_all_forrester_distances(G, reference_node_tab4, mode=mode)
-
-        # Build a flat DataFrame of all reachable authors with their distance
-        excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
-        rows = []
-        for author, dist in dist_map.items():
-            if author in excluded or len(author) <= 2:
-                continue
-            node_data = G.nodes[author]
-            rows.append({
-                "Author": author,
-                "Forrester Number": dist,
-                "Papers": node_data.get("num_papers", 0),
-                "Co-authors": node_data.get("num_coauthors", 0),
-                "Country": node_data.get("country") or "",
-                "Organization": node_data.get("organization") or "",
-            })
-
-        all_dist_df = pd.DataFrame(rows).sort_values(
-            ["Forrester Number", "Papers"], ascending=[True, False]
-        ).reset_index(drop=True)
-
-        max_dist = int(all_dist_df["Forrester Number"].max())
-        n_reachable = len(all_dist_df)
-        n_unreachable = G.number_of_nodes() - len(dist_map)
-
-        st.caption(
-            f"**{n_reachable:,}** authors reachable from Forrester · "
-            f"**{n_unreachable:,}** not connected · "
-            f"Max distance: **{max_dist}**"
-        )
-
-        st.divider()
-
-        # --- Controls ---
-        col_dist, col_search, col_country2, col_org2 = st.columns([1, 2, 1, 1])
-
-        with col_dist:
-            dist_options = ["All"] + list(range(0, max_dist + 1))
-            selected_dist = st.selectbox(
-                "Forrester Number",
-                options=dist_options,
-                index=0,
-                key="browse_dist"
-            )
-
-        with col_search:
-            name_filter = st.text_input("Filter by name", key="browse_name")
-
-        with col_country2:
-            country_filter = st.multiselect(
-                "Country",
-                options=all_countries,
-                default=[],
-                key="browse_country"
-            )
-
-        with col_org2:
-            org_filter = st.multiselect(
-                "Organization",
-                options=all_orgs,
-                default=[],
-                key="browse_org"
-            )
-
-        # Apply filters
-        view_df = all_dist_df.copy()
-
-        if selected_dist != "All":
-            view_df = view_df[view_df["Forrester Number"] == int(selected_dist)]
-
-        if name_filter.strip():
-            view_df = view_df[
-                view_df["Author"].str.contains(name_filter.strip(), case=False, na=False)
-            ]
-
-        if country_filter:
-            view_df = view_df[view_df["Country"].isin(country_filter)]
-
-        if org_filter:
-            view_df = view_df[view_df["Organization"].isin(org_filter)]
-
-        st.caption(f"Showing **{len(view_df):,}** authors")
-
-        st.divider()
-
-        # --- Main table ---
-        if selected_dist == "All":
-            st.subheader("All Authors by Distance")
-        else:
-            st.subheader(f"Forrester Number {selected_dist}")
-
-        display_df = view_df[["Forrester Number", "Author", "Papers", "Co-authors", "Country", "Organization"]].copy()
-        display_df.index = range(1, len(display_df) + 1)
-        st.dataframe(display_df, use_container_width=True, height=600)
-
-        # --- Summary counts by distance ---
-        if selected_dist == "All":
-            st.subheader("Authors per Forrester Number")
-            summary = (
-                all_dist_df.groupby("Forrester Number")
-                .size()
-                .rename("Count")
-                .reset_index()
-            )
-            summary.index = summary["Forrester Number"]
-            st.bar_chart(summary["Count"])
-
-        # --- Unreachable authors (not connected to Forrester) ---
-        with st.expander(f"Unconnected authors ({n_unreachable:,} — no path to Forrester)"):
-            unreachable_rows = []
-            reachable_set = set(dist_map.keys())
-            for node in G.nodes():
-                if node not in reachable_set and node not in excluded and len(node) > 2:
-                    nd = G.nodes[node]
-                    unreachable_rows.append({
-                        "Author": node,
-                        "Papers": nd.get("num_papers", 0),
-                        "Co-authors": nd.get("num_coauthors", 0),
-                        "Country": nd.get("country") or "",
-                        "Organization": nd.get("organization") or "",
-                    })
-            if unreachable_rows:
-                unreach_df = pd.DataFrame(unreachable_rows).sort_values(
-                    "Papers", ascending=False
-                ).reset_index(drop=True)
-                unreach_df.index = range(1, len(unreach_df) + 1)
-                st.caption("These authors have no co-authorship path to Jay Wright Forrester in the dataset.")
-                st.dataframe(unreach_df, use_container_width=True, height=400)
 
 
 with tab3:
@@ -1457,6 +1306,81 @@ with tab3:
 
 
 # =============================================================================
+# Author Connections (distance & paths between any two authors)
+# =============================================================================
+
+with tab_pf:
+    st.header("Author Connections")
+    st.markdown(
+        "Find the **co-authorship distance** and the shortest path(s) between **any two "
+        "authors** — the general case of the Forrester Number."
+    )
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        pf_query_a = st.text_input("Author A", key="pf_query_a")
+    with col_b:
+        pf_query_b = st.text_input("Author B", key="pf_query_b")
+
+    pf_sel_a = pf_sel_b = None
+    if pf_query_a:
+        pf_cand_a = search_authors(pf_query_a, all_authors_sorted, limit=10, score_cutoff=60)
+        if pf_cand_a:
+            pf_sel_a = st.radio("Select Author A:", options=[n for n, _ in pf_cand_a], key="pf_sel_a")
+        else:
+            st.info("No matching author found for Author A.")
+    if pf_query_b:
+        pf_cand_b = search_authors(pf_query_b, all_authors_sorted, limit=10, score_cutoff=60)
+        if pf_cand_b:
+            pf_sel_b = st.radio("Select Author B:", options=[n for n, _ in pf_cand_b], key="pf_sel_b")
+        else:
+            st.info("No matching author found for Author B.")
+
+    if pf_sel_a and pf_sel_b:
+        st.markdown("---")
+        if pf_sel_a == pf_sel_b:
+            st.info("Author A and Author B are the same person — distance 0.")
+        elif pf_sel_a not in G or pf_sel_b not in G:
+            st.warning("One of the selected authors isn't in the current network scope.")
+        elif not nx.has_path(G, pf_sel_a, pf_sel_b):
+            scope_note = " (conference scope)" if mode == "conference" else ""
+            st.warning(
+                f"**{pf_sel_a}** and **{pf_sel_b}** are not connected in the co-author network{scope_note}."
+            )
+        else:
+            try:
+                pf_dist = nx.shortest_path_length(G, pf_sel_a, pf_sel_b)
+                st.success(
+                    f"**{pf_sel_a}** and **{pf_sel_b}** are **{pf_dist}** co-authorship step(s) apart."
+                )
+
+                pf_paths = []
+                for i, path in enumerate(nx.all_shortest_paths(G, pf_sel_a, pf_sel_b)):
+                    pf_paths.append(path)
+                    if i >= 9:
+                        break
+
+                if len(pf_paths) == 1:
+                    st.markdown("**Shortest path:**")
+                else:
+                    st.markdown(f"**{len(pf_paths)} shortest paths:**")
+                for path in pf_paths:
+                    st.markdown("- " + " → ".join(path))
+
+                st.markdown("---")
+                st.subheader("Path Tree")
+                pf_fig = plot_forrester_path_tree(pf_paths, pf_sel_b, pf_sel_a, distance_label="Distance")
+                if pf_fig:
+                    st.plotly_chart(pf_fig, use_container_width=True)
+                    st.caption(
+                        f"**{pf_sel_b}** is at the top; each row down is one more co-authorship step "
+                        f"toward **{pf_sel_a}**. Hover any node for details."
+                    )
+            except Exception as e:
+                st.error(f"Error finding path: {str(e)}")
+
+
+# =============================================================================
 # Organization Network
 # =============================================================================
 
@@ -1519,57 +1443,3 @@ with tab_on:
                         org_fig = plot_org_ego(H, selected_org)
                         if org_fig is not None:
                             st.plotly_chart(org_fig, use_container_width=True)
-
-
-# =============================================================================
-# Organization Papers
-# =============================================================================
-
-with tab_op:
-    st.header("Organization Papers")
-    st.markdown(
-        "Find all papers with at least one author affiliated with a given organization."
-    )
-
-    OG = build_org_network(G, mode=mode)
-    org_names = sorted(OG.nodes())
-    st.caption(
-        f"**{len(org_names):,}** organizations with a recorded affiliation in scope. "
-        "Affiliation data is sparse, so only authors with a known organization appear here."
-    )
-
-    if not org_names:
-        st.info("No organization data available in the current scope.")
-    else:
-        org_query2 = st.text_input("Search for an organization", key="orgpapers_search")
-        if org_query2:
-            matches2 = search_orgs(org_query2, org_names)
-            if not matches2:
-                st.info("No matching organizations found.")
-            else:
-                selected_org2 = st.radio("Select an organization:", options=matches2, key="orgpapers_select")
-                if selected_org2:
-                    all_domains = sorted([d for d in df["Domain"].dropna().unique() if str(d).strip()])
-                    selected_domains = st.multiselect(
-                        "Filter by domain (leave empty for all)",
-                        options=all_domains, default=[], key="orgpapers_domain",
-                    )
-
-                    org_pdf, members = get_org_papers(df, G, selected_org2, mode=mode)
-                    if selected_domains and not org_pdf.empty:
-                        org_pdf = org_pdf[org_pdf["Domain"].isin(selected_domains)]
-
-                    domain_note = " in selected domain(s)" if selected_domains else ""
-                    st.caption(
-                        f"**{selected_org2}** · {len(members)} affiliated author(s) in scope · "
-                        f"{len(org_pdf):,} paper(s){domain_note}"
-                    )
-                    with st.expander("Affiliated authors"):
-                        st.write(", ".join(members) if members else "None")
-
-                    if not org_pdf.empty:
-                        disp = org_pdf.copy()
-                        disp.index = range(1, len(disp) + 1)
-                        st.dataframe(disp, use_container_width=True, height=500)
-                    else:
-                        st.info("No papers found for this organization in the current scope.")
