@@ -76,7 +76,7 @@ def search_authors(query, all_authors, limit=10, score_cutoff=60):
 # =============================================================================
 
 @st.cache_data
-def get_coauthors_by_degree(_G, author, max_degree=2):
+def get_coauthors_by_degree(_G, author, max_degree=2, mode="full"):
     """Get co-authors up to max_degree hops from author."""
     if author not in _G:
         return []
@@ -314,6 +314,173 @@ def plot_coauthor_network(H, center_author):
 
 
 # =============================================================================
+# Organization Functions
+# =============================================================================
+
+def build_org_mapping_from_graph(G):
+    """Return {normalized_author: organization} for authors present in G."""
+    m = {}
+    for n, d in G.nodes(data=True):
+        org = d.get("organization")
+        if org and str(org).strip():
+            m[n] = str(org).strip()
+    return m
+
+
+@st.cache_data
+def build_org_network(_G, mode="full"):
+    """Organization-level collaboration graph derived from co-author edges.
+
+    Nodes are organizations with >=1 author in _G. An edge between two
+    organizations is weighted by the number of shared papers across all
+    cross-organization co-author pairs. Intra-org collaboration is kept as
+    a node attribute.
+    """
+    author_org = build_org_mapping_from_graph(_G)
+
+    org_authors = defaultdict(set)
+    for a, org in author_org.items():
+        org_authors[org].add(a)
+
+    OG = nx.Graph()
+    for org, authors in org_authors.items():
+        OG.add_node(org, num_authors=len(authors), intra_weight=0)
+
+    inter = defaultdict(int)
+    for u, v, d in _G.edges(data=True):
+        ou, ov = author_org.get(u), author_org.get(v)
+        if not ou or not ov:
+            continue
+        w = d.get("weight", 1)
+        if ou == ov:
+            OG.nodes[ou]["intra_weight"] += w
+        else:
+            inter[tuple(sorted((ou, ov)))] += w
+
+    for (a, b), w in inter.items():
+        OG.add_edge(a, b, weight=w)
+
+    return OG
+
+
+def search_orgs(query, org_names, limit=12, score_cutoff=60):
+    """Search organizations by substring first, then fuzzy match."""
+    if not query or not query.strip():
+        return []
+    q = query.strip().lower()
+    exact = [(o, min(100, len(q) / max(len(o), 1) * 100 + 50)) for o in org_names if q in o.lower()]
+    if exact:
+        exact.sort(key=lambda x: (-x[1], x[0]))
+        return [o for o, _ in exact[:limit]]
+    res = process.extract(query, org_names, scorer=fuzz.WRatio, limit=limit)
+    return [o for o, s, _ in res if s >= score_cutoff]
+
+
+def build_org_ego(OG, center, max_degree=1):
+    """Ego subgraph of the organization graph centered on `center`."""
+    if center not in OG:
+        return nx.Graph()
+    H = nx.Graph()
+    levels = {center: 0}
+    queue = [(center, 0)]
+    while queue:
+        node, lvl = queue.pop(0)
+        if lvl >= max_degree:
+            continue
+        for nbr in OG.neighbors(node):
+            if nbr not in levels:
+                levels[nbr] = lvl + 1
+                queue.append((nbr, lvl + 1))
+    for n, lvl in levels.items():
+        H.add_node(n, level=lvl, **OG.nodes[n])
+    for n in levels:
+        for nbr in OG.neighbors(n):
+            if nbr in levels:
+                H.add_edge(n, nbr, weight=OG[n][nbr].get("weight", 1))
+    return H
+
+
+def plot_org_ego(H, center):
+    """Plotly ego network of organizations, centered on `center`."""
+    if H.number_of_nodes() == 0:
+        return None
+
+    n = H.number_of_nodes()
+    k = 6 / np.sqrt(n) if n > 1 else 1
+    pos = nx.spring_layout(H, seed=42, k=k, iterations=200, scale=3)
+
+    edge_traces = []
+    for u, v in H.edges():
+        x0, y0 = pos[u]
+        x1, y1 = pos[v]
+        w = H[u][v].get("weight", 1)
+        edge_traces.append(go.Scatter(
+            x=[x0, x1, None], y=[y0, y1, None],
+            mode="lines",
+            line=dict(width=min(1 + w * 0.4, 8), color="rgba(150,150,150,0.5)"),
+            hoverinfo="skip", showlegend=False
+        ))
+
+    level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d"}
+    xs, ys, txt, col, siz, lab = [], [], [], [], [], []
+    for node in H.nodes():
+        x, y = pos[node]
+        xs.append(x); ys.append(y); lab.append(node)
+        lvl = H.nodes[node].get("level", 2)
+        na = H.nodes[node].get("num_authors", 0)
+        txt.append(f"<b>{node}</b><br>Affiliated authors: {na}<br>Degree from center: {lvl}")
+        col.append(level_colors.get(lvl, "#6c757d"))
+        siz.append(46 if lvl == 0 else (28 if lvl == 1 else 20))
+
+    show_labels = n <= 30
+    node_trace = go.Scatter(
+        x=xs, y=ys,
+        mode="markers+text" if show_labels else "markers",
+        text=lab if show_labels else None,
+        textposition="top center",
+        textfont=dict(size=9, color="#333"),
+        hoverinfo="text", hovertext=txt,
+        marker=dict(size=siz, color=col, line=dict(width=2, color="white"), opacity=0.9),
+        showlegend=False
+    )
+
+    fig = go.Figure(data=edge_traces + [node_trace])
+    fig.update_layout(
+        showlegend=False, plot_bgcolor="#f8f9fa",
+        margin=dict(l=5, r=5, t=5, b=5), height=600,
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, constrain="domain"),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x"),
+        dragmode="pan", hovermode="closest"
+    )
+    return fig
+
+
+@st.cache_data
+def get_org_papers(_df, _G, org, mode="full"):
+    """Papers within scope that include at least one author affiliated with `org`."""
+    author_org = build_org_mapping_from_graph(_G)
+    members = {a for a, o in author_org.items() if o == org}
+    if not members:
+        return pd.DataFrame(), []
+    rows = []
+    for _, row in _df.iterrows():
+        auth = set(parse_authors(row["Authors"]))
+        hit = members & auth
+        if hit:
+            rows.append({
+                "Year": int(row["Year"]) if pd.notna(row["Year"]) else None,
+                "Title": row["Title"],
+                "Domain": row.get("Domain") or "",
+                "Org authors": ", ".join(sorted(hit)),
+                "Link": row.get("Link") or "",
+            })
+    pdf = pd.DataFrame(rows)
+    if not pdf.empty:
+        pdf = pdf.sort_values("Year", ascending=False, na_position="last").reset_index(drop=True)
+    return pdf, sorted(members)
+
+
+# =============================================================================
 # Data Loading
 # =============================================================================
 
@@ -331,7 +498,7 @@ def load_author_stats():
     return pd.read_parquet(os.path.join("data", "author_stats_bibliography.parquet"))
 
 @st.cache_data
-def get_all_authors_sorted(_G):
+def get_all_authors_sorted(_G, mode="full"):
     # Filter out problematic author names and deduplicate by normalized name
     excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
     
@@ -369,13 +536,19 @@ def get_author_org_mapping(_author_stats):
     return mapping
 
 
-# Load data
-df = load_dataframe()
-G = load_graph()
+@st.cache_resource
+def load_graph_conference():
+    with open(os.path.join("data", "coauthor_graph_conference.pkl"), "rb") as f:
+        return pickle.load(f)
+
+
+# Load data (full dataset + conference-only subset)
+df_full = load_dataframe()
+G_full = load_graph()
+G_conf = load_graph_conference()
 author_stats = load_author_stats()
 
-# Pre-compute
-all_authors_sorted = get_all_authors_sorted(G)
+# Dataset-wide filter option lists and author -> org map
 all_countries = get_all_countries(author_stats)
 all_orgs = get_all_orgs(author_stats)
 author_org_mapping = get_author_org_mapping(author_stats)
@@ -386,6 +559,31 @@ author_org_mapping = get_author_org_mapping(author_stats)
 # =============================================================================
 
 st.set_page_config(page_title="SD Bibliography Explorer", layout="wide")
+
+# --- Global scope toggle: full bibliography vs conference proceedings only ---
+with st.sidebar:
+    st.markdown("### Dataset scope")
+    conference_only = st.toggle(
+        "Conference proceedings only",
+        value=False,
+        help="Restrict every view to ISDC conference-proceedings papers and the "
+             "co-authorship network built from them.",
+    )
+    mode = "conference" if conference_only else "full"
+    st.caption(
+        "Conference papers are identified from the ISDC proceedings export "
+        "(matched by title) plus proceedings.systemdynamics.org links."
+    )
+
+if conference_only:
+    df = df_full[df_full["is_conference"]].copy()
+    G = G_conf
+else:
+    df = df_full
+    G = G_full
+
+# Author search list follows the active scope
+all_authors_sorted = get_all_authors_sorted(G, mode=mode)
 
 # Custom CSS for tab styling (matching the conference proceedings app)
 st.markdown("""
@@ -418,14 +616,24 @@ st.markdown("""
 
 # Main title
 st.title("System Dynamics Bibliography Explorer (Demo)")
-st.caption(f"Exploring **{len(df):,}** papers and **{G.number_of_nodes():,}** authors ({int(df['Year'].min())}-{int(df['Year'].max())})")
+_scope = "Conference proceedings only" if conference_only else "Full bibliography"
+if len(df):
+    st.caption(
+        f"**{_scope}** · Exploring **{len(df):,}** papers and "
+        f"**{G.number_of_nodes():,}** authors ({int(df['Year'].min())}-{int(df['Year'].max())})"
+    )
+else:
+    st.caption(f"**{_scope}** · No papers in scope")
 
 
 # =============================================================================
 # Tab Navigation
 # =============================================================================
 
-tab1, tab2, tab3, tab4 = st.tabs(["Authors", "Co-authors", "Forrester Number", "Browse by Distance"])
+tab1, tab2, tab_on, tab_op, tab3, tab4 = st.tabs(
+    ["Authors", "Co-authors", "Organization Network", "Organization Papers",
+     "Forrester Number", "Browse by Distance"]
+)
 
 
 # =============================================================================
@@ -693,7 +901,7 @@ with tab2:
                 )
                 
                 # Co-author tables (cached)
-                degree_dfs = get_coauthors_by_degree(G, selected_author, max_degree=max_degree)
+                degree_dfs = get_coauthors_by_degree(G, selected_author, max_degree=max_degree, mode=mode)
                 
                 if degree_dfs:
                     degree_labels = ["1st degree (direct)", "2nd degree", "3rd degree"]
@@ -996,7 +1204,7 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author):
 # =============================================================================
 
 @st.cache_data
-def get_all_forrester_distances(_G, reference_node):
+def get_all_forrester_distances(_G, reference_node, mode="full"):
     """
     BFS from reference_node to get shortest path distance for every reachable node.
     Returns a dict: author -> distance
@@ -1023,7 +1231,7 @@ with tab4:
         st.error(f"**{REFERENCE_AUTHOR}** not found in the co-author network.")
     else:
         # Compute all distances
-        dist_map = get_all_forrester_distances(G, reference_node_tab4)
+        dist_map = get_all_forrester_distances(G, reference_node_tab4, mode=mode)
 
         # Build a flat DataFrame of all reachable authors with their distance
         excluded = {'Unknown', 'Anonymous', 'unknown', 'anonymous', ''}
@@ -1246,3 +1454,122 @@ with tab3:
 
 
 
+
+
+# =============================================================================
+# Organization Network
+# =============================================================================
+
+with tab_on:
+    st.header("Organization Network")
+    st.markdown(
+        "Search for an organization to explore the other organizations it has "
+        "collaborated with, based on its authors co-authoring papers together."
+    )
+
+    OG = build_org_network(G, mode=mode)
+    org_names = sorted(OG.nodes())
+    st.caption(
+        f"**{len(org_names):,}** organizations with a recorded affiliation in scope. "
+        "Affiliation data is sparse, so only authors with a known organization appear here."
+    )
+
+    if not org_names:
+        st.info("No organization data available in the current scope.")
+    else:
+        org_query = st.text_input("Search for an organization", key="orgnet_search")
+        if org_query:
+            matches = search_orgs(org_query, org_names)
+            if not matches:
+                st.info("No matching organizations found.")
+            else:
+                selected_org = st.radio("Select an organization:", options=matches, key="orgnet_select")
+                if selected_org:
+                    na = OG.nodes[selected_org].get("num_authors", 0)
+                    partners = sorted(
+                        ((nbr, OG[selected_org][nbr].get("weight", 1)) for nbr in OG.neighbors(selected_org)),
+                        key=lambda x: -x[1],
+                    )
+
+                    c1, c2 = st.columns(2)
+                    c1.metric("Affiliated authors", na)
+                    c2.metric("Partner organizations", len(partners))
+
+                    max_degree = st.radio(
+                        "Degrees of separation", options=[1, 2], index=0, horizontal=True,
+                        help="1 = organizations directly collaborated with", key="orgnet_degree",
+                    )
+
+                    if partners:
+                        st.subheader("Collaborating organizations")
+                        ptbl = pd.DataFrame(partners, columns=["Organization", "Shared papers"])
+                        ptbl.index = range(1, len(ptbl) + 1)
+                        st.dataframe(ptbl, use_container_width=True)
+                    else:
+                        st.info("No cross-organization collaborations recorded for this organization.")
+
+                    H = build_org_ego(OG, selected_org, max_degree=max_degree)
+                    if H.number_of_edges() > 0:
+                        st.markdown("---")
+                        st.subheader("Organization network")
+                        st.caption(
+                            "Center (red) = selected organization · **node size** = affiliated authors · "
+                            "**edge thickness** = shared papers."
+                        )
+                        org_fig = plot_org_ego(H, selected_org)
+                        if org_fig is not None:
+                            st.plotly_chart(org_fig, use_container_width=True)
+
+
+# =============================================================================
+# Organization Papers
+# =============================================================================
+
+with tab_op:
+    st.header("Organization Papers")
+    st.markdown(
+        "Find all papers with at least one author affiliated with a given organization."
+    )
+
+    OG = build_org_network(G, mode=mode)
+    org_names = sorted(OG.nodes())
+    st.caption(
+        f"**{len(org_names):,}** organizations with a recorded affiliation in scope. "
+        "Affiliation data is sparse, so only authors with a known organization appear here."
+    )
+
+    if not org_names:
+        st.info("No organization data available in the current scope.")
+    else:
+        org_query2 = st.text_input("Search for an organization", key="orgpapers_search")
+        if org_query2:
+            matches2 = search_orgs(org_query2, org_names)
+            if not matches2:
+                st.info("No matching organizations found.")
+            else:
+                selected_org2 = st.radio("Select an organization:", options=matches2, key="orgpapers_select")
+                if selected_org2:
+                    all_domains = sorted([d for d in df["Domain"].dropna().unique() if str(d).strip()])
+                    selected_domains = st.multiselect(
+                        "Filter by domain (leave empty for all)",
+                        options=all_domains, default=[], key="orgpapers_domain",
+                    )
+
+                    org_pdf, members = get_org_papers(df, G, selected_org2, mode=mode)
+                    if selected_domains and not org_pdf.empty:
+                        org_pdf = org_pdf[org_pdf["Domain"].isin(selected_domains)]
+
+                    domain_note = " in selected domain(s)" if selected_domains else ""
+                    st.caption(
+                        f"**{selected_org2}** · {len(members)} affiliated author(s) in scope · "
+                        f"{len(org_pdf):,} paper(s){domain_note}"
+                    )
+                    with st.expander("Affiliated authors"):
+                        st.write(", ".join(members) if members else "None")
+
+                    if not org_pdf.empty:
+                        disp = org_pdf.copy()
+                        disp.index = range(1, len(disp) + 1)
+                        st.dataframe(disp, use_container_width=True, height=500)
+                    else:
+                        st.info("No papers found for this organization in the current scope.")
