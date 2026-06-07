@@ -349,6 +349,7 @@ def build_org_network(_G, mode="full"):
         OG.add_node(org, num_authors=len(authors), intra_weight=0)
 
     inter = defaultdict(int)
+    inter_papers = defaultdict(list)
     for u, v, d in _G.edges(data=True):
         ou, ov = author_org.get(u), author_org.get(v)
         if not ou or not ov:
@@ -357,10 +358,20 @@ def build_org_network(_G, mode="full"):
         if ou == ov:
             OG.nodes[ou]["intra_weight"] += w
         else:
-            inter[tuple(sorted((ou, ov)))] += w
+            key = tuple(sorted((ou, ov)))
+            inter[key] += w
+            inter_papers[key].extend(d.get("papers", []) or [])
 
-    for (a, b), w in inter.items():
-        OG.add_edge(a, b, weight=w)
+    for (a, b) in inter:
+        # de-duplicate papers shared between the two organizations
+        seen, papers = set(), []
+        for p in inter_papers[(a, b)]:
+            pk = (p.get("title"), p.get("year"))
+            if pk not in seen:
+                seen.add(pk)
+                papers.append(p)
+        # weight = number of distinct papers co-authored across the two orgs
+        OG.add_edge(a, b, weight=len(papers) if papers else inter[(a, b)], papers=papers)
 
     return OG
 
@@ -399,30 +410,60 @@ def build_org_ego(OG, center, max_degree=1):
     for n in levels:
         for nbr in OG.neighbors(n):
             if nbr in levels:
-                H.add_edge(n, nbr, weight=OG[n][nbr].get("weight", 1))
+                H.add_edge(n, nbr, weight=OG[n][nbr].get("weight", 1),
+                           papers=OG[n][nbr].get("papers", []))
     return H
 
 
 def plot_org_ego(H, center):
-    """Plotly ego network of organizations, centered on `center`."""
+    """Plotly ego network of organizations, centered on `center`.
+
+    Returns (figure, edge_paper_lookup) where the lookup maps an edge key
+    to its two organizations and the papers they share.
+    """
     if H.number_of_nodes() == 0:
-        return None
+        return None, {}
 
     n = H.number_of_nodes()
     k = 6 / np.sqrt(n) if n > 1 else 1
     pos = nx.spring_layout(H, seed=42, k=k, iterations=200, scale=3)
 
+    edge_paper_lookup = {}
     edge_traces = []
+    mid_x, mid_y, mid_labels, mid_keys = [], [], [], []
+
     for u, v in H.edges():
         x0, y0 = pos[u]
         x1, y1 = pos[v]
+        xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
         w = H[u][v].get("weight", 1)
+        papers = H[u][v].get("papers", [])
+        edge_key = f"{u}|||{v}"
+        edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": w}
+
         edge_traces.append(go.Scatter(
             x=[x0, x1, None], y=[y0, y1, None],
             mode="lines",
             line=dict(width=min(1 + w * 0.4, 8), color="rgba(150,150,150,0.5)"),
             hoverinfo="skip", showlegend=False
         ))
+        mid_x.append(xm)
+        mid_y.append(ym)
+        mid_labels.append(f"{u} & {v}: {w} shared paper(s)\n(click to see details below)")
+        mid_keys.append(edge_key)
+
+    # Invisible midpoint markers — clicking one triggers a selection event
+    edge_traces.append(go.Scatter(
+        x=mid_x, y=mid_y,
+        mode="markers",
+        marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=0)),
+        hoverinfo="text",
+        hovertext=mid_labels,
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=11)),
+        customdata=mid_keys,
+        showlegend=False,
+        name="edges"
+    ))
 
     level_colors = {0: "#d62828", 1: "#2a9d8f", 2: "#457b9d"}
     xs, ys, txt, col, siz, lab = [], [], [], [], [], []
@@ -455,7 +496,7 @@ def plot_org_ego(H, center):
         yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x"),
         dragmode="pan", hovermode="closest"
     )
-    return fig
+    return fig, edge_paper_lookup
 
 
 @st.cache_data
@@ -601,9 +642,6 @@ if "conf_only" not in st.session_state:
 conference_only = st.toggle(
     "Conference proceedings only",
     key="conf_only",
-    help="Restrict every tab to ISDC conference-proceedings papers and the "
-         "co-authorship network built from them. Conference papers are identified "
-         "from the ISDC proceedings export plus proceedings.systemdynamics.org links.",
 )
 mode = "conference" if conference_only else "full"
 
@@ -619,7 +657,7 @@ _scope = "Conference proceedings only" if conference_only else "Full bibliograph
 if len(df):
     st.caption(
         f"**{_scope}** · Exploring **{len(df):,}** papers and "
-        f"**{G.number_of_nodes():,}** authors ({int(df['Year'].min())}-{int(df['Year'].max())})"
+        f"**{G.number_of_nodes():,}** authors"
     )
 else:
     st.caption(f"**{_scope}** · No papers in scope")
@@ -631,7 +669,7 @@ else:
 
 tab1, tab2, tab3, tab_pf, tab_on = st.tabs(
     ["Authors", "Co-authors", "Forrester Number", "Author Distance",
-     "Organization Network"]
+     "Organizations"]
 )
 
 
@@ -642,7 +680,7 @@ tab1, tab2, tab3, tab_pf, tab_on = st.tabs(
 with tab1:
     st.header("Authors")
     
-    st.markdown("Explore the most prolific authors in the System Dynamics bibliography.")
+    st.markdown("Explore authors in the System Dynamics bibliography.")
     
     # Filters
     col_year, col_country, col_org = st.columns([2, 1, 1])
@@ -725,7 +763,7 @@ with tab1:
     
     # Author table
     st.subheader("Authors")
-    st.caption(f"**{len(tbl):,}** authors match the filters (from **{len(df_filtered):,}** papers)")
+    st.caption(f"**{len(tbl):,}** authors match the filters")
     
     tbl_show = tbl.sort_values(["NumPapers_Filtered", "NumCoauthors"], ascending=False).head(top_n)
     
@@ -740,7 +778,7 @@ with tab1:
     st.dataframe(tbl_display, use_container_width=True)
     
     # Network visualization
-    st.subheader("Network (Most prolific authors)")
+    st.subheader("Network")
     
     max_nodes = st.slider("Max nodes to display", 25, 400, 25, key="max_nodes_tab1")
     
@@ -1237,7 +1275,7 @@ with tab3:
         info = G.nodes[reference_in_graph]
         st.caption(
             f"**{reference_in_graph}** · {info.get('num_papers', 0)} papers · "
-            f"{info.get('num_coauthors', 0)} direct co-authors in the database."
+            f"{info.get('num_coauthors', 0)} direct co-authors."
         )
 
         author_query_tab3 = st.text_input("Search for an author", key="forrester_search")
@@ -1384,7 +1422,7 @@ with tab_pf:
 # =============================================================================
 
 with tab_on:
-    st.header("Organization Network")
+    st.header("Organizations")
     st.markdown(
         "Search for an organization to explore the other organizations it has "
         "collaborated with, based on its authors co-authoring papers together."
@@ -1418,27 +1456,68 @@ with tab_on:
                     c1.metric("Affiliated authors", na)
                     c2.metric("Partner organizations", len(partners))
 
-                    max_degree = st.radio(
-                        "Degrees of separation", options=[1, 2], index=0, horizontal=True,
-                        help="1 = organizations directly collaborated with", key="orgnet_degree",
-                    )
-
                     if partners:
                         st.subheader("Collaborating organizations")
                         ptbl = pd.DataFrame(partners, columns=["Organization", "Shared papers"])
                         ptbl.index = range(1, len(ptbl) + 1)
                         st.dataframe(ptbl, use_container_width=True)
-                    else:
-                        st.info("No cross-organization collaborations recorded for this organization.")
 
-                    H = build_org_ego(OG, selected_org, max_degree=max_degree)
-                    if H.number_of_edges() > 0:
                         st.markdown("---")
                         st.subheader("Organization network")
+                        max_degree = st.radio(
+                            "Degrees of separation", options=[1, 2], index=0, horizontal=True,
+                            key="orgnet_degree",
+                        )
                         st.caption(
                             "Center (red) = selected organization · **node size** = affiliated authors · "
-                            "**edge thickness** = shared papers."
+                            "**edge thickness** = shared papers · click a connection to see the shared papers below."
                         )
-                        org_fig = plot_org_ego(H, selected_org)
-                        if org_fig is not None:
-                            st.plotly_chart(org_fig, use_container_width=True)
+
+                        H = build_org_ego(OG, selected_org, max_degree=max_degree)
+                        if H.number_of_edges() > 0:
+                            org_fig, org_edge_lookup = plot_org_ego(H, selected_org)
+
+                            clear_key = f"orgnet_clear_{selected_org}"
+                            if clear_key not in st.session_state:
+                                st.session_state[clear_key] = 0
+
+                            event = st.plotly_chart(
+                                org_fig,
+                                use_container_width=True,
+                                on_select="rerun",
+                                selection_mode="points",
+                                key=f"orgnet_chart_{selected_org}_{st.session_state[clear_key]}"
+                            )
+
+                            clicked_key = None
+                            if event and event.selection and event.selection.get("points"):
+                                for pt in event.selection["points"]:
+                                    cd = pt.get("customdata")
+                                    if cd and "|||" in str(cd):
+                                        clicked_key = str(cd)
+                                        break
+
+                            if clicked_key and clicked_key in org_edge_lookup:
+                                edata = org_edge_lookup[clicked_key]
+                                u, v = edata["u"], edata["v"]
+                                papers = edata["papers"]
+                                col_title, col_clear = st.columns([6, 1])
+                                col_title.markdown(f"**Shared papers: {u} & {v}**")
+                                if col_clear.button("Clear", key=f"orgnet_clear_btn_{selected_org}"):
+                                    st.session_state[clear_key] += 1
+                                    st.rerun()
+                                if papers:
+                                    for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
+                                        year = p.get("year") or "?"
+                                        title = p.get("title") or "(no title)"
+                                        link = p.get("link")
+                                        if link:
+                                            st.markdown(f"- [{title}]({link}) ({year})")
+                                        else:
+                                            st.markdown(f"- {title} ({year})")
+                                else:
+                                    st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
+                            else:
+                                st.caption("Click on a connection line (midpoint) to see the shared papers between two organizations.")
+                    else:
+                        st.info("No cross-organization collaborations recorded for this organization.")
