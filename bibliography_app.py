@@ -286,7 +286,7 @@ def plot_coauthor_network(H, center_author):
         mode="markers+text" if show_labels else "markers",
         text=node_names if show_labels else None,
         textposition="top center",
-        textfont=dict(size=9, color="#333333"),
+        textfont=dict(size=13, color="#333333"),
         hoverinfo="text",
         hovertext=node_text,
         marker=dict(
@@ -482,7 +482,7 @@ def plot_org_ego(H, center):
         mode="markers+text" if show_labels else "markers",
         text=lab if show_labels else None,
         textposition="top center",
-        textfont=dict(size=9, color="#333"),
+        textfont=dict(size=13, color="#333"),
         hoverinfo="text", hovertext=txt,
         marker=dict(size=siz, color=col, line=dict(width=2, color="white"), opacity=0.9),
         showlegend=False
@@ -1205,7 +1205,7 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author, distanc
         mode="markers+text",
         text=node_labels,
         textposition="top center",
-        textfont=dict(size=11, color="#222222"),
+        textfont=dict(size=13, color="#222222"),
         hoverinfo="text",
         hovertext=node_hover,
         marker=dict(
