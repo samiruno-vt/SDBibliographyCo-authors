@@ -304,8 +304,8 @@ def plot_coauthor_network(H, center_author):
         plot_bgcolor="#f8f9fa",
         margin=dict(l=5, r=5, t=5, b=5),
         height=600,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, constrain="domain"),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x"),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         dragmode="pan",
         hovermode="closest"
     )
@@ -492,8 +492,8 @@ def plot_org_ego(H, center):
     fig.update_layout(
         showlegend=False, plot_bgcolor="#f8f9fa",
         margin=dict(l=5, r=5, t=5, b=5), height=600,
-        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False, constrain="domain"),
-        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False, scaleanchor="x"),
+        xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
+        yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
         dragmode="pan", hovermode="closest"
     )
     return fig, edge_paper_lookup
@@ -1469,7 +1469,7 @@ with tab_on:
                             key="orgnet_degree",
                         )
                         st.caption(
-                            "Center (red) = selected organization · **node size** = affiliated authors · "
+                            "**Center (red)** = selected organization · **node size** = affiliated authors · "
                             "**edge thickness** = shared papers · click a connection to see the shared papers below."
                         )
 
