@@ -17,6 +17,29 @@ from collections import defaultdict
 from itertools import combinations
 
 
+# Canonical display order for the Publication type filter (Authors tab).
+PUB_TYPE_ORDER = [
+    "Conference Paper",
+    "Journal Article",
+    "D-memo",
+    "Book",
+    "Book Section",
+    "Thesis",
+    "Textbook",
+]
+
+
+def edge_visual(weight):
+    """Return (width, color) for a co-authorship edge so the number of shared
+    papers is easy to tell apart: thin and light for a single shared paper,
+    progressively thicker and darker as the count grows."""
+    w = max(int(weight or 1), 1)
+    width = min(1.2 + 1.4 * (w - 1), 11)
+    alpha = min(0.30 + 0.13 * (w - 1), 0.9)
+    shade = int(max(150 - 18 * (w - 1), 60))
+    return width, f"rgba({shade},{shade},{shade},{alpha:.2f})"
+
+
 # =============================================================================
 # Name Normalization Functions
 # =============================================================================
@@ -215,14 +238,14 @@ def plot_coauthor_network(H, center_author):
         edge_key = f"{u}|||{v}"
         edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": weight}
 
-        # Width scaled by shared papers: 1 paper = 1px, caps at 6px
-        edge_width = min(1 + (weight - 1) * 0.5, 6)
+        # Width and shade scaled by number of shared papers
+        edge_width, edge_color = edge_visual(weight)
 
         # Visible line
         edge_traces.append(go.Scatter(
             x=[x0, x1, None], y=[y0, y1, None],
             mode="lines",
-            line=dict(width=edge_width, color="rgba(150,150,150,0.5)"),
+            line=dict(width=edge_width, color=edge_color),
             hoverinfo="skip",
             showlegend=False
         ))
@@ -239,7 +262,7 @@ def plot_coauthor_network(H, center_author):
         marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=0)),
         hoverinfo="text",
         hovertext=mid_labels,
-        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=11)),
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=14)),
         customdata=mid_keys,
         showlegend=False,
         name="edges"
@@ -286,9 +309,10 @@ def plot_coauthor_network(H, center_author):
         mode="markers+text" if show_labels else "markers",
         text=node_names if show_labels else None,
         textposition="top center",
-        textfont=dict(size=13, color="#333333"),
+        textfont=dict(size=17, color="#222222"),
         hoverinfo="text",
         hovertext=node_text,
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=15)),
         marker=dict(
             size=node_sizes,
             color=node_colors,
@@ -441,10 +465,11 @@ def plot_org_ego(H, center):
         edge_key = f"{u}|||{v}"
         edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": w}
 
+        _ew, _ec = edge_visual(w)
         edge_traces.append(go.Scatter(
             x=[x0, x1, None], y=[y0, y1, None],
             mode="lines",
-            line=dict(width=min(1 + w * 0.4, 8), color="rgba(150,150,150,0.5)"),
+            line=dict(width=_ew, color=_ec),
             hoverinfo="skip", showlegend=False
         ))
         mid_x.append(xm)
@@ -459,7 +484,7 @@ def plot_org_ego(H, center):
         marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=0)),
         hoverinfo="text",
         hovertext=mid_labels,
-        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=11)),
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=14)),
         customdata=mid_keys,
         showlegend=False,
         name="edges"
@@ -482,8 +507,9 @@ def plot_org_ego(H, center):
         mode="markers+text" if show_labels else "markers",
         text=lab if show_labels else None,
         textposition="top center",
-        textfont=dict(size=13, color="#333"),
+        textfont=dict(size=15, color="#222"),
         hoverinfo="text", hovertext=txt,
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=15)),
         marker=dict(size=siz, color=col, line=dict(width=2, color="white"), opacity=0.9),
         showlegend=False
     )
@@ -602,7 +628,7 @@ author_org_mapping = get_author_org_mapping(author_stats)
 # Page Config
 # =============================================================================
 
-st.set_page_config(page_title="SD Bibliography Explorer", layout="wide")
+st.set_page_config(page_title="System Dynamics Collaboration Explorer (Demo)", layout="wide")
 
 # Custom CSS for tab styling (matching the conference proceedings app)
 st.markdown("""
@@ -634,7 +660,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # Main title
-st.title("System Dynamics Bibliography Explorer (Demo)")
+st.title("System Dynamics Collaboration Explorer (Demo)")
 
 # Dataset scope filter (in-page, applies to every tab)
 if "conf_only" not in st.session_state:
@@ -667,8 +693,12 @@ else:
 # Tab Navigation
 # =============================================================================
 
-tab1, tab2, tab3, tab_pf, tab_on = st.tabs(
-    ["Authors", "Co-authors", "Forrester Number", "Author Distance",
+# Note: the "Forrester Number" tab has been disabled. It is removed from the
+# tab bar here and its body is commented out further below (search for
+# "Forrester Number tab"). The supporting functions are kept intact so the
+# tab can be restored easily if requested.
+tab1, tab2, tab_pf, tab_on = st.tabs(
+    ["Authors", "Co-authors", "Co-author Distance",
      "Organizations"]
 )
 
@@ -686,11 +716,16 @@ with tab1:
     col_year, col_country, col_org = st.columns([2, 1, 1])
     
     with col_year:
+        _yr_min = int(df["Year"].min())
+        _yr_max = int(df["Year"].max())
+        # Default the lower bound to 1956 (the year Jay Forrester became an MIT
+        # professor), but never outside the data's actual range.
+        _yr_default_low = min(max(1956, _yr_min), _yr_max)
         year_min, year_max = st.slider(
             "Year range",
-            min_value=int(df["Year"].min()),
-            max_value=int(df["Year"].max()),
-            value=(int(df["Year"].min()), int(df["Year"].max())),
+            min_value=_yr_min,
+            max_value=_yr_max,
+            value=(_yr_default_low, _yr_max),
             key="top_authors_year"
         )
     
@@ -709,6 +744,24 @@ with tab1:
             default=[],
             key="top_authors_org"
         )
+
+    # Publication type filter (independent of the "Conference proceedings only"
+    # scope toggle above; this filters by the document type of each entry).
+    if "category" in df.columns:
+        present_types = set(df["category"].dropna().unique())
+        pub_type_options = [t for t in PUB_TYPE_ORDER if t in present_types]
+        # Include any unexpected/extra categories at the end so nothing is hidden.
+        pub_type_options += sorted(present_types - set(pub_type_options))
+        selected_pub_types = st.multiselect(
+            "Publication type",
+            options=pub_type_options,
+            default=pub_type_options,
+            key="top_authors_pubtype",
+            help="Filter authors by the type of entry their papers come from. "
+                 "This is separate from the Conference proceedings only toggle."
+        )
+    else:
+        selected_pub_types = None
     
     col_min_papers, col_min_coauth, col_top_n = st.columns(3)
     
@@ -722,7 +775,12 @@ with tab1:
         top_n = st.slider("Number of authors to show", 10, 200, 50, key="top_n_authors")
     
     # Filter papers by year
-    df_filtered = df[df["Year"].between(year_min, year_max)].copy()
+    df_filtered = df[df["Year"].between(year_min, year_max)]
+    # Filter by publication type when the column is present and a subset is chosen
+    if selected_pub_types is not None and "category" in df_filtered.columns:
+        if len(selected_pub_types) < len(pub_type_options):
+            df_filtered = df_filtered[df_filtered["category"].isin(selected_pub_types)]
+    df_filtered = df_filtered.copy()
     
     # Count papers per author in filtered range
     ap = df_filtered[["Authors"]].copy()
@@ -797,7 +855,14 @@ with tab1:
                 if b in H:
                     weight = G[a][b].get("weight", 1)
                     H.add_edge(a, b, weight=weight)
-    
+
+    # Remove authors who share no paper with anyone else in the displayed set.
+    # These isolated nodes carry no co-authorship information and otherwise
+    # float far from the rest of the layout, which looks like a glitch.
+    _isolated = list(nx.isolates(H))
+    if _isolated:
+        H.remove_nodes_from(_isolated)
+
     if H.number_of_nodes() > 0:
         n = H.number_of_nodes()
         k = 8 / np.sqrt(n) if n > 1 else 1
@@ -809,10 +874,11 @@ with tab1:
             x0, y0 = pos[u]
             x1, y1 = pos[v]
             weight = H[u][v].get("weight", 1)
+            _ew, _ec = edge_visual(weight)
             edge_traces.append(go.Scatter(
                 x=[x0, x1, None], y=[y0, y1, None],
                 mode="lines",
-                line=dict(width=1 + weight * 0.5, color="rgba(150,150,150,0.5)"),
+                line=dict(width=_ew, color=_ec),
                 hoverinfo="skip",
                 showlegend=False
             ))
@@ -866,6 +932,7 @@ with tab1:
             mode="markers",
             hoverinfo="text",
             hovertext=node_text,
+            hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=15)),
             marker=dict(
                 size=node_sizes,
                 color=node_colors,
@@ -889,8 +956,22 @@ with tab1:
             hovermode="closest"
         )
         
-        st.caption(f"Showing {H.number_of_nodes()} authors and {H.number_of_edges()} co-authorship links.")
-        st.caption("**Node size** = Total Papers · **Node color** = Co-authors · **Edge thickness** = shared papers")
+        _omitted = len(_isolated)
+        st.markdown(
+            "<div style='font-size:15px; color:#333; line-height:1.6;'>"
+            f"Showing <b>{H.number_of_nodes()}</b> authors and "
+            f"<b>{H.number_of_edges()}</b> co-authorship links.<br>"
+            "<b>Node size</b> = total papers &nbsp;·&nbsp; "
+            "<b>Node color</b> = number of co-authors &nbsp;·&nbsp; "
+            "<b>Edge thickness</b> = number of shared papers."
+            "</div>",
+            unsafe_allow_html=True
+        )
+        if _omitted:
+            st.caption(
+                f"{_omitted} selected author(s) share no paper with anyone else "
+                "in this set and are not shown in the network."
+            )
         st.plotly_chart(fig, use_container_width=True)
     else:
         st.info("No nodes to display.")
@@ -964,22 +1045,25 @@ with tab2:
                     
                     st.subheader("Co-author Network")
                     
-                    # Legend
+                    # Legend — color key on the first line, reading instructions
+                    # on a second line for clarity.
+                    _swatch = (
+                        lambda color, label:
+                        '<span style="display:inline-flex; align-items:center; margin-right:18px;">'
+                        f'<span style="width:14px; height:14px; border-radius:50%; '
+                        f'background-color:{color}; margin-right:6px;"></span>'
+                        f'<span style="color:#333; font-size:15px;">{label}</span></span>'
+                    )
                     legend_html = (
-                        '<div style="display:flex; align-items:center; gap:16px; margin-bottom:8px;">'
-                        '<span style="display:inline-flex; align-items:center;">'
-                        '<span style="width:12px; height:12px; border-radius:50%; background-color:#d62828; margin-right:5px;"></span>'
-                        '<span style="color:#555; font-size:13px;">Selected author</span></span>'
-                        '<span style="display:inline-flex; align-items:center;">'
-                        '<span style="width:12px; height:12px; border-radius:50%; background-color:#2a9d8f; margin-right:5px;"></span>'
-                        '<span style="color:#555; font-size:13px;">1st degree</span></span>'
-                        '<span style="display:inline-flex; align-items:center;">'
-                        '<span style="width:12px; height:12px; border-radius:50%; background-color:#457b9d; margin-right:5px;"></span>'
-                        '<span style="color:#555; font-size:13px;">2nd degree</span></span>'
-                        '<span style="display:inline-flex; align-items:center;">'
-                        '<span style="width:12px; height:12px; border-radius:50%; background-color:#8338ec; margin-right:5px;"></span>'
-                        '<span style="color:#555; font-size:13px;">3rd degree</span></span>'
-                        '<span style="color:#555; font-size:13px; margin-left:8px;">Edge thickness = shared papers · Click a connection to see details below</span>'
+                        '<div style="margin-bottom:6px;">'
+                        + _swatch("#d62828", "Selected author")
+                        + _swatch("#2a9d8f", "1st degree")
+                        + _swatch("#457b9d", "2nd degree")
+                        + _swatch("#8338ec", "3rd degree")
+                        + '</div>'
+                        '<div style="color:#333; font-size:15px; line-height:1.6; margin-bottom:8px;">'
+                        '<b>Edge thickness</b> = number of shared papers.<br>'
+                        'Click a connection (its midpoint) to see the shared papers below.'
                         '</div>'
                     )
                     st.markdown(legend_html, unsafe_allow_html=True)
@@ -1205,9 +1289,10 @@ def plot_forrester_path_tree(all_paths, reference_node, selected_author, distanc
         mode="markers+text",
         text=node_labels,
         textposition="top center",
-        textfont=dict(size=13, color="#222222"),
+        textfont=dict(size=15, color="#222222"),
         hoverinfo="text",
         hovertext=node_hover,
+        hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=15)),
         marker=dict(
             size=node_sizes,
             color=node_colors,
@@ -1249,95 +1334,103 @@ def get_all_forrester_distances(_G, reference_node, mode="full"):
     return nx.single_source_shortest_path_length(_G, reference_node)
 
 
-with tab3:
-    st.header("Forrester Number")
-
-    st.markdown(
-        f"""
-        Find your Forrester Number — the degrees of co-authorship separation from {REFERENCE_AUTHOR}.
-
-        - Forrester Number 1: You co-authored a paper directly with {REFERENCE_AUTHOR}
-        - Forrester Number 2: You co-authored with someone who co-authored with {REFERENCE_AUTHOR}
-        - And so on
-        """
-    )
-
-    # Check if reference author exists in graph
-    reference_in_graph = None
-    for node in G.nodes():
-        if normalize_author_name(REFERENCE_AUTHOR) == normalize_author_name(node):
-            reference_in_graph = node
-            break
-
-    if reference_in_graph is None:
-        st.error(f"**{REFERENCE_AUTHOR}** not found in the co-author network.")
-    else:
-        info = G.nodes[reference_in_graph]
-        st.caption(
-            f"**{reference_in_graph}** · {info.get('num_papers', 0)} papers · "
-            f"{info.get('num_coauthors', 0)} direct co-authors."
-        )
-
-        author_query_tab3 = st.text_input("Search for an author", key="forrester_search")
-
-        if author_query_tab3:
-            candidates = search_authors(author_query_tab3, all_authors_sorted, limit=10, score_cutoff=60)
-
-            if not candidates:
-                st.info("No matching authors found.")
-            else:
-                author_names_tab3 = [name for name, score in candidates]
-                selected_author_tab3 = st.radio("Select an author:", options=author_names_tab3, key="forrester_select")
-
-                if selected_author_tab3:
-                    st.markdown("---")
-
-                    if selected_author_tab3 == reference_in_graph:
-                        st.success(f"**{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
-
-                    elif not nx.has_path(G, selected_author_tab3, reference_in_graph):
-                        st.warning(
-                            f"**{selected_author_tab3}** is not connected to {REFERENCE_AUTHOR} "
-                            "in the co-author network."
-                        )
-
-                    else:
-                        try:
-                            forrester_number = nx.shortest_path_length(G, selected_author_tab3, reference_in_graph)
-                            st.success(f"**{selected_author_tab3}** has a Forrester Number of **{forrester_number}**")
-
-                            # Collect up to 10 shortest paths
-                            all_paths = []
-                            for i, path in enumerate(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph)):
-                                all_paths.append(path)
-                                if i >= 9:
-                                    break
-
-                            if len(all_paths) == 1:
-                                st.markdown(f"**Path to {REFERENCE_AUTHOR}:**")
-                            else:
-                                st.markdown(f"**{len(all_paths)} shortest paths to {REFERENCE_AUTHOR}:**")
-
-                            for path in all_paths:
-                                st.markdown("- " + " → ".join(path))
-
-                            # Family tree visualization
-                            st.markdown("---")
-                            st.subheader("Path Tree")
-
-                            fig = plot_forrester_path_tree(all_paths, reference_in_graph, selected_author_tab3)
-                            if fig:
-                                st.plotly_chart(fig, use_container_width=True)
-                                st.caption(
-                                    "**How to read this:** Jay Wright Forrester is at the top. "
-                                    "Each row below represents one additional degree of separation. "
-                                    "Lines connect co-authors. Where multiple paths exist, "
-                                    "shared intermediaries appear once with lines converging into them. "
-                                    "Hover over any node for details."
-                                )
-
-                        except Exception as e:
-                            st.error(f"Error finding path: {str(e)}")
+# =============================================================================
+# Forrester Number tab (DISABLED)
+# -----------------------------------------------------------------------------
+# This tab has been turned off at the client's request. The body is preserved
+# (commented out) so it can be restored later: uncomment the block below and
+# add "Forrester Number" back into the st.tabs(...) call near the top, restoring
+# the tab3 variable. The helper functions it relies on are left intact above.
+# =============================================================================
+# with tab3:
+#     st.header("Forrester Number")
+#
+#     st.markdown(
+#         f"""
+#         Find your Forrester Number — the degrees of co-authorship separation from {REFERENCE_AUTHOR}.
+#
+#         - Forrester Number 1: You co-authored a paper directly with {REFERENCE_AUTHOR}
+#         - Forrester Number 2: You co-authored with someone who co-authored with {REFERENCE_AUTHOR}
+#         - And so on
+#         """
+#     )
+#
+#     # Check if reference author exists in graph
+#     reference_in_graph = None
+#     for node in G.nodes():
+#         if normalize_author_name(REFERENCE_AUTHOR) == normalize_author_name(node):
+#             reference_in_graph = node
+#             break
+#
+#     if reference_in_graph is None:
+#         st.error(f"**{REFERENCE_AUTHOR}** not found in the co-author network.")
+#     else:
+#         info = G.nodes[reference_in_graph]
+#         st.caption(
+#             f"**{reference_in_graph}** · {info.get('num_papers', 0)} papers · "
+#             f"{info.get('num_coauthors', 0)} direct co-authors."
+#         )
+#
+#         author_query_tab3 = st.text_input("Search for an author", key="forrester_search")
+#
+#         if author_query_tab3:
+#             candidates = search_authors(author_query_tab3, all_authors_sorted, limit=10, score_cutoff=60)
+#
+#             if not candidates:
+#                 st.info("No matching authors found.")
+#             else:
+#                 author_names_tab3 = [name for name, score in candidates]
+#                 selected_author_tab3 = st.radio("Select an author:", options=author_names_tab3, key="forrester_select")
+#
+#                 if selected_author_tab3:
+#                     st.markdown("---")
+#
+#                     if selected_author_tab3 == reference_in_graph:
+#                         st.success(f"**{selected_author_tab3}** IS {REFERENCE_AUTHOR}! Forrester Number = **0**")
+#
+#                     elif not nx.has_path(G, selected_author_tab3, reference_in_graph):
+#                         st.warning(
+#                             f"**{selected_author_tab3}** is not connected to {REFERENCE_AUTHOR} "
+#                             "in the co-author network."
+#                         )
+#
+#                     else:
+#                         try:
+#                             forrester_number = nx.shortest_path_length(G, selected_author_tab3, reference_in_graph)
+#                             st.success(f"**{selected_author_tab3}** has a Forrester Number of **{forrester_number}**")
+#
+#                             # Collect up to 10 shortest paths
+#                             all_paths = []
+#                             for i, path in enumerate(nx.all_shortest_paths(G, selected_author_tab3, reference_in_graph)):
+#                                 all_paths.append(path)
+#                                 if i >= 9:
+#                                     break
+#
+#                             if len(all_paths) == 1:
+#                                 st.markdown(f"**Path to {REFERENCE_AUTHOR}:**")
+#                             else:
+#                                 st.markdown(f"**{len(all_paths)} shortest paths to {REFERENCE_AUTHOR}:**")
+#
+#                             for path in all_paths:
+#                                 st.markdown("- " + " → ".join(path))
+#
+#                             # Family tree visualization
+#                             st.markdown("---")
+#                             st.subheader("Path Tree")
+#
+#                             fig = plot_forrester_path_tree(all_paths, reference_in_graph, selected_author_tab3)
+#                             if fig:
+#                                 st.plotly_chart(fig, use_container_width=True)
+#                                 st.caption(
+#                                     "**How to read this:** Jay Wright Forrester is at the top. "
+#                                     "Each row below represents one additional degree of separation. "
+#                                     "Lines connect co-authors. Where multiple paths exist, "
+#                                     "shared intermediaries appear once with lines converging into them. "
+#                                     "Hover over any node for details."
+#                                 )
+#
+#                         except Exception as e:
+#                             st.error(f"Error finding path: {str(e)}")
 
 
 
@@ -1348,73 +1441,96 @@ with tab3:
 # =============================================================================
 
 with tab_pf:
-    st.header("Author Distance")
+    st.header("Co-author Distance")
     st.markdown(
         "Find the co-authorship distance and the shortest path(s) between any two authors."
     )
 
-    col_a, col_b = st.columns(2)
-    with col_a:
-        pf_query_a = st.text_input("Author A", key="pf_query_a")
-    with col_b:
-        pf_query_b = st.text_input("Author B", key="pf_query_b")
+    left, right = st.columns([1, 1.5])
 
+    # --- Inputs: Author A above Author B, in the left column ---
     pf_sel_a = pf_sel_b = None
-    if pf_query_a:
-        pf_cand_a = search_authors(pf_query_a, all_authors_sorted, limit=10, score_cutoff=60)
-        if pf_cand_a:
-            pf_sel_a = st.radio("Select Author A:", options=[n for n, _ in pf_cand_a], key="pf_sel_a")
-        else:
-            st.info("No matching author found for Author A.")
-    if pf_query_b:
-        pf_cand_b = search_authors(pf_query_b, all_authors_sorted, limit=10, score_cutoff=60)
-        if pf_cand_b:
-            pf_sel_b = st.radio("Select Author B:", options=[n for n, _ in pf_cand_b], key="pf_sel_b")
-        else:
-            st.info("No matching author found for Author B.")
+    with left:
+        pf_query_a = st.text_input("Author A", key="pf_query_a")
+        if pf_query_a:
+            pf_cand_a = search_authors(pf_query_a, all_authors_sorted, limit=10, score_cutoff=60)
+            if pf_cand_a:
+                pf_sel_a = st.radio("Select Author A:", options=[n for n, _ in pf_cand_a], key="pf_sel_a")
+            else:
+                st.info("No matching author found for Author A.")
 
-    if pf_sel_a and pf_sel_b:
-        st.markdown("---")
-        if pf_sel_a == pf_sel_b:
-            st.info("Author A and Author B are the same person — distance 0.")
-        elif pf_sel_a not in G or pf_sel_b not in G:
-            st.warning("One of the selected authors isn't in the current network scope.")
-        elif not nx.has_path(G, pf_sel_a, pf_sel_b):
-            scope_note = " (conference scope)" if mode == "conference" else ""
-            st.warning(
-                f"**{pf_sel_a}** and **{pf_sel_b}** are not connected in the co-author network{scope_note}."
-            )
-        else:
-            try:
-                pf_dist = nx.shortest_path_length(G, pf_sel_a, pf_sel_b)
-                st.success(
-                    f"**{pf_sel_a}** and **{pf_sel_b}** are **{pf_dist}** co-authorship step(s) apart."
+        pf_query_b = st.text_input("Author B", key="pf_query_b")
+        if pf_query_b:
+            pf_cand_b = search_authors(pf_query_b, all_authors_sorted, limit=10, score_cutoff=60)
+            if pf_cand_b:
+                pf_sel_b = st.radio("Select Author B:", options=[n for n, _ in pf_cand_b], key="pf_sel_b")
+            else:
+                st.info("No matching author found for Author B.")
+
+    # --- Result: prominent distance and shortest path(s), in the right column ---
+    pf_paths = []
+    pf_ready = False
+    with right:
+        if pf_sel_a and pf_sel_b:
+            if pf_sel_a == pf_sel_b:
+                st.markdown(
+                    "<div style='background:#eef4fb; border:1px solid #cfe0f3; border-radius:10px; "
+                    "padding:18px 22px;'>"
+                    "<div style='font-size:64px; font-weight:700; color:#1f4e79; line-height:1;'>0</div>"
+                    "<div style='font-size:17px; color:#333; margin-top:8px;'>"
+                    "Author A and Author B are the same person.</div></div>",
+                    unsafe_allow_html=True,
                 )
-
-                pf_paths = []
-                for i, path in enumerate(nx.all_shortest_paths(G, pf_sel_a, pf_sel_b)):
-                    pf_paths.append(path)
-                    if i >= 9:
-                        break
-
-                if len(pf_paths) == 1:
-                    st.markdown("**Shortest path:**")
-                else:
-                    st.markdown(f"**{len(pf_paths)} shortest paths:**")
-                for path in pf_paths:
-                    st.markdown("- " + " → ".join(path))
-
-                st.markdown("---")
-                st.subheader("Path Tree")
-                pf_fig = plot_forrester_path_tree(pf_paths, pf_sel_b, pf_sel_a, distance_label="Distance")
-                if pf_fig:
-                    st.plotly_chart(pf_fig, use_container_width=True)
-                    st.caption(
-                        f"**{pf_sel_b}** is at the top; each row down is one more co-authorship step "
-                        f"toward **{pf_sel_a}**. Hover any node for details."
+            elif pf_sel_a not in G or pf_sel_b not in G:
+                st.warning("One of the selected authors isn't in the current network scope.")
+            elif not nx.has_path(G, pf_sel_a, pf_sel_b):
+                scope_note = " (conference scope)" if mode == "conference" else ""
+                st.warning(
+                    f"**{pf_sel_a}** and **{pf_sel_b}** are not connected "
+                    f"in the co-author network{scope_note}."
+                )
+            else:
+                try:
+                    pf_dist = nx.shortest_path_length(G, pf_sel_a, pf_sel_b)
+                    step_word = "step" if pf_dist == 1 else "steps"
+                    st.markdown(
+                        "<div style='background:#eef4fb; border:1px solid #cfe0f3; border-radius:10px; "
+                        "padding:18px 22px;'>"
+                        f"<div style='font-size:64px; font-weight:700; color:#1f4e79; line-height:1;'>{pf_dist}</div>"
+                        f"<div style='font-size:17px; color:#333; margin-top:8px;'>co-authorship {step_word} between<br>"
+                        f"<b>{pf_sel_a}</b> and <b>{pf_sel_b}</b></div></div>",
+                        unsafe_allow_html=True,
                     )
-            except Exception as e:
-                st.error(f"Error finding path: {str(e)}")
+
+                    for i, path in enumerate(nx.all_shortest_paths(G, pf_sel_a, pf_sel_b)):
+                        pf_paths.append(path)
+                        if i >= 9:
+                            break
+
+                    st.markdown("")
+                    if len(pf_paths) == 1:
+                        st.markdown("**Shortest path:**")
+                    else:
+                        st.markdown(f"**{len(pf_paths)} shortest paths:**")
+                    for path in pf_paths:
+                        st.markdown("- " + " → ".join(path))
+                    pf_ready = True
+                except Exception as e:
+                    st.error(f"Error finding path: {str(e)}")
+        else:
+            st.caption("Select an Author A and an Author B to see how far apart they are.")
+
+    # --- Path tree spans the full width below the two columns ---
+    if pf_ready and pf_paths:
+        st.markdown("---")
+        st.subheader("Path Tree")
+        pf_fig = plot_forrester_path_tree(pf_paths, pf_sel_b, pf_sel_a, distance_label="Distance")
+        if pf_fig:
+            st.plotly_chart(pf_fig, use_container_width=True)
+            st.caption(
+                f"**{pf_sel_b}** is at the top; each row down is one more co-authorship step "
+                f"toward **{pf_sel_a}**. Hover any node for details."
+            )
 
 
 # =============================================================================
@@ -1468,9 +1584,14 @@ with tab_on:
                             "Degrees of separation", options=[1, 2], index=0, horizontal=True,
                             key="orgnet_degree",
                         )
-                        st.caption(
-                            "**Center (red)** = selected organization · **node size** = affiliated authors · "
-                            "**edge thickness** = shared papers · click a connection to see the shared papers below."
+                        st.markdown(
+                            "<div style='font-size:15px; color:#333; line-height:1.6; margin-bottom:8px;'>"
+                            "<b>Center (red)</b> = selected organization &nbsp;·&nbsp; "
+                            "<b>Node size</b> = number of affiliated authors &nbsp;·&nbsp; "
+                            "<b>Edge thickness</b> = number of shared papers.<br>"
+                            "Click a connection (its midpoint) to see the shared papers below."
+                            "</div>",
+                            unsafe_allow_html=True,
                         )
 
                         H = build_org_ego(OG, selected_org, max_degree=max_degree)
