@@ -747,7 +747,7 @@ with tab1:
 
     # Publication type filter (independent of the "Conference proceedings only"
     # scope toggle above; this filters by the document type of each entry).
-    if "category" in df.columns:
+    if "category" in df.columns and df["category"].notna().any():
         present_types = set(df["category"].dropna().unique())
         pub_type_options = [t for t in PUB_TYPE_ORDER if t in present_types]
         # Include any unexpected/extra categories at the end so nothing is hidden.
@@ -762,6 +762,11 @@ with tab1:
         )
     else:
         selected_pub_types = None
+        st.caption(
+            "Publication type filter unavailable: the loaded data has no "
+            "`category` column. Use the updated papers_bibliography.parquet "
+            "(or re-run build_data.py) to enable it."
+        )
     
     col_min_papers, col_min_coauth, col_top_n = st.columns(3)
     
@@ -772,7 +777,7 @@ with tab1:
         min_coauthors = st.number_input("Min co-authors", min_value=0, value=0, key="min_coauth")
     
     with col_top_n:
-        top_n = st.slider("Number of authors to show", 10, 200, 50, key="top_n_authors")
+        top_n = st.slider("Number of authors to show", 10, 200, 25, key="top_n_authors")
     
     # Filter papers by year
     df_filtered = df[df["Year"].between(year_min, year_max)]
@@ -854,7 +859,7 @@ with tab1:
             for b in G.neighbors(a):
                 if b in H:
                     weight = G[a][b].get("weight", 1)
-                    H.add_edge(a, b, weight=weight)
+                    H.add_edge(a, b, weight=weight, papers=G[a][b].get("papers", []))
 
     # Remove authors who share no paper with anyone else in the displayed set.
     # These isolated nodes carry no co-authorship information and otherwise
@@ -868,12 +873,19 @@ with tab1:
         k = 8 / np.sqrt(n) if n > 1 else 1
         pos = nx.spring_layout(H, seed=42, k=k, iterations=300, scale=3)
         
-        # Edges
+        # Edges: visible lines plus invisible midpoint markers that carry a
+        # hover popup (author names + shared-paper count) and a click target.
         edge_traces = []
+        edge_paper_lookup = {}
+        mid_x, mid_y, mid_labels, mid_keys = [], [], [], []
         for u, v in H.edges():
             x0, y0 = pos[u]
             x1, y1 = pos[v]
+            xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
             weight = H[u][v].get("weight", 1)
+            papers = H[u][v].get("papers", [])
+            edge_key = f"{u}|||{v}"
+            edge_paper_lookup[edge_key] = {"u": u, "v": v, "papers": papers, "weight": weight}
             _ew, _ec = edge_visual(weight)
             edge_traces.append(go.Scatter(
                 x=[x0, x1, None], y=[y0, y1, None],
@@ -882,6 +894,22 @@ with tab1:
                 hoverinfo="skip",
                 showlegend=False
             ))
+            mid_x.append(xm)
+            mid_y.append(ym)
+            mid_labels.append(f"{u} & {v}: {weight} shared paper(s)\n(click to see details below)")
+            mid_keys.append(edge_key)
+
+        edge_traces.append(go.Scatter(
+            x=mid_x, y=mid_y,
+            mode="markers",
+            marker=dict(size=14, color="rgba(0,0,0,0)", line=dict(width=0)),
+            hoverinfo="text",
+            hovertext=mid_labels,
+            hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=14)),
+            customdata=mid_keys,
+            showlegend=False,
+            name="edges"
+        ))
         
         # Nodes
         node_x, node_y, node_text, node_sizes, node_colors = [], [], [], [], []
@@ -927,9 +955,14 @@ with tab1:
                 norm_c = 0
             node_colors.append(norm_c)
         
+        # Label nodes with names when the network is small enough to stay legible.
+        show_labels = n <= 40
         node_trace = go.Scatter(
             x=node_x, y=node_y,
-            mode="markers",
+            mode="markers+text" if show_labels else "markers",
+            text=node_names if show_labels else None,
+            textposition="top center",
+            textfont=dict(size=15, color="#222222"),
             hoverinfo="text",
             hovertext=node_text,
             hoverlabel=dict(bgcolor="white", bordercolor="#aaa", font=dict(size=15)),
@@ -963,7 +996,9 @@ with tab1:
             f"<b>{H.number_of_edges()}</b> co-authorship links.<br>"
             "<b>Node size</b> = total papers &nbsp;·&nbsp; "
             "<b>Node color</b> = number of co-authors &nbsp;·&nbsp; "
-            "<b>Edge thickness</b> = number of shared papers."
+            "<b>Edge thickness</b> = number of shared papers.<br>"
+            "Hover an author or a connection for details; click a connection "
+            "(its midpoint) to see the shared papers below."
             "</div>",
             unsafe_allow_html=True
         )
@@ -972,7 +1007,46 @@ with tab1:
                 f"{_omitted} selected author(s) share no paper with anyone else "
                 "in this set and are not shown in the network."
             )
-        st.plotly_chart(fig, use_container_width=True)
+
+        _t1_clear = "tab1_net_clear"
+        if _t1_clear not in st.session_state:
+            st.session_state[_t1_clear] = 0
+        _t1_event = st.plotly_chart(
+            fig,
+            use_container_width=True,
+            on_select="rerun",
+            selection_mode="points",
+            key=f"tab1_net_{st.session_state[_t1_clear]}"
+        )
+
+        _t1_clicked = None
+        if _t1_event and _t1_event.selection and _t1_event.selection.get("points"):
+            for pt in _t1_event.selection["points"]:
+                cd = pt.get("customdata")
+                if cd and "|||" in str(cd):
+                    _t1_clicked = str(cd)
+                    break
+
+        if _t1_clicked and _t1_clicked in edge_paper_lookup:
+            edata = edge_paper_lookup[_t1_clicked]
+            u, v = edata["u"], edata["v"]
+            papers = edata["papers"]
+            col_title, col_clear = st.columns([6, 1])
+            col_title.markdown(f"**Shared papers: {u} & {v}**")
+            if col_clear.button("Clear", key="tab1_clear_btn"):
+                st.session_state[_t1_clear] += 1
+                st.rerun()
+            if papers:
+                for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
+                    year = p.get("year") or "?"
+                    title = p.get("title") or "(no title)"
+                    link = p.get("link")
+                    if link:
+                        st.markdown(f"- [{title}]({link}) ({year})")
+                    else:
+                        st.markdown(f"- {title} ({year})")
+            else:
+                st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
     else:
         st.info("No nodes to display.")
 
@@ -1508,12 +1582,18 @@ with tab_pf:
                             break
 
                     st.markdown("")
-                    if len(pf_paths) == 1:
-                        st.markdown("**Shortest path:**")
-                    else:
-                        st.markdown(f"**{len(pf_paths)} shortest paths:**")
-                    for path in pf_paths:
-                        st.markdown("- " + " → ".join(path))
+                    _hdr = "Shortest path:" if len(pf_paths) == 1 else f"{len(pf_paths)} shortest paths:"
+                    _items = "".join(
+                        "<li style='margin-bottom:10px;'>" + " &rarr; ".join(path) + "</li>"
+                        for path in pf_paths
+                    )
+                    st.markdown(
+                        "<div style='font-size:17px; color:#222;'>"
+                        f"<b>{_hdr}</b>"
+                        f"<ul style='font-size:17px; line-height:1.6; margin-top:8px;'>{_items}</ul>"
+                        "</div>",
+                        unsafe_allow_html=True,
+                    )
                     pf_ready = True
                 except Exception as e:
                     st.error(f"Error finding path: {str(e)}")
