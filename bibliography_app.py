@@ -40,6 +40,15 @@ def edge_visual(weight):
     return width, f"rgba({shade},{shade},{shade},{alpha:.2f})"
 
 
+def field_label(text):
+    """Render a field label that matches Streamlit's native widget label size
+    (used for controls like st.popover that don't render their own label)."""
+    st.markdown(
+        f"<div style='font-size:0.875rem; margin-bottom:0.25rem;'>{text}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 # =============================================================================
 # Name Normalization Functions
 # =============================================================================
@@ -758,7 +767,7 @@ with tab1:
     col_pubtype, col_top_n = st.columns([2, 1])
 
     with col_pubtype:
-        st.markdown("Publication type")
+        field_label("Publication type")
         if pub_type_options:
             # Summarize the current selection on the dropdown button.
             _n_sel = sum(st.session_state.get(f"pubtype_{t}", True) for t in pub_type_options)
@@ -787,7 +796,7 @@ with tab1:
             )
 
     with col_top_n:
-        st.markdown("Number of authors to show")
+        field_label("Number of authors to show")
         top_n = st.number_input(
             "Number of authors to show",
             min_value=10, max_value=200, value=25, step=5,
