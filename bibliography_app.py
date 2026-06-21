@@ -745,37 +745,47 @@ with tab1:
             key="top_authors_org"
         )
 
-    # Publication type filter (independent of the "Conference proceedings only"
-    # scope toggle above; this filters by the document type of each entry).
+    # Determine available publication types. The control itself is rendered
+    # below, in the row that previously held Min papers / Min co-authors.
     if "category" in df.columns and df["category"].notna().any():
         present_types = set(df["category"].dropna().unique())
         pub_type_options = [t for t in PUB_TYPE_ORDER if t in present_types]
         # Include any unexpected/extra categories at the end so nothing is hidden.
         pub_type_options += sorted(present_types - set(pub_type_options))
-        selected_pub_types = st.multiselect(
-            "Publication type",
-            options=pub_type_options,
-            default=pub_type_options,
-            key="top_authors_pubtype",
-            help="Filter authors by the type of entry their papers come from. "
-                 "This is separate from the Conference proceedings only toggle."
-        )
     else:
-        selected_pub_types = None
-        st.caption(
-            "Publication type filter unavailable: the loaded data has no "
-            "`category` column. Use the updated papers_bibliography.parquet "
-            "(or re-run build_data.py) to enable it."
-        )
-    
-    col_min_papers, col_min_coauth, col_top_n = st.columns(3)
-    
-    with col_min_papers:
-        min_papers = st.number_input("Min papers", min_value=1, value=1, key="min_papers")
-    
-    with col_min_coauth:
-        min_coauthors = st.number_input("Min co-authors", min_value=0, value=0, key="min_coauth")
-    
+        pub_type_options = None
+
+    col_pubtype, col_top_n = st.columns([2, 1])
+
+    with col_pubtype:
+        st.markdown("Publication type")
+        if pub_type_options:
+            # Summarize the current selection on the dropdown button.
+            _n_sel = sum(st.session_state.get(f"pubtype_{t}", True) for t in pub_type_options)
+            if _n_sel == len(pub_type_options):
+                _pt_label = f"All types ({len(pub_type_options)})"
+            elif _n_sel == 0:
+                _pt_label = "No types selected"
+            else:
+                _pt_label = f"{_n_sel} of {len(pub_type_options)} selected"
+
+            with st.popover(_pt_label, use_container_width=True):
+                st.caption(
+                    "Filter authors by the type of entry their papers come from. "
+                    "This is separate from the Conference proceedings only toggle."
+                )
+                selected_pub_types = [
+                    t for t in pub_type_options
+                    if st.checkbox(t, value=True, key=f"pubtype_{t}")
+                ]
+        else:
+            selected_pub_types = None
+            st.caption(
+                "Publication type filter unavailable: the loaded data has no "
+                "`category` column. Use the updated papers_bibliography.parquet "
+                "(or re-run build_data.py) to enable it."
+            )
+
     with col_top_n:
         top_n = st.slider("Number of authors to show", 10, 200, 25, key="top_n_authors")
     
@@ -813,8 +823,9 @@ with tab1:
     tbl = tbl[~tbl["Author"].isin(excluded_authors)]
     tbl = tbl[tbl["Author"].str.len() > 2]  # Filter very short names
     
-    # Apply filters
-    tbl = tbl[(tbl["NumPapers_Filtered"] >= min_papers) & (tbl["NumCoauthors"] >= min_coauthors)]
+    # Keep authors with at least one paper in the current year/publication-type
+    # scope (the Min papers / Min co-authors controls were removed).
+    tbl = tbl[tbl["NumPapers_Filtered"] >= 1]
     
     if selected_countries:
         tbl = tbl[tbl["Country"].isin(selected_countries)]
@@ -843,7 +854,7 @@ with tab1:
     # Network visualization
     st.subheader("Network")
     
-    max_nodes = st.slider("Max nodes to display", 25, 400, 25, key="max_nodes_tab1")
+    max_nodes = st.slider("Max nodes to display", 10, 150, 25, key="max_nodes_tab1")
     
     top_authors = tbl.sort_values(["NumPapers_Filtered", "NumCoauthors"], ascending=False).head(max_nodes)["Author"].tolist()
     
@@ -919,9 +930,6 @@ with tab1:
         max_papers = max(papers_vals) if papers_vals else 1
         min_papers_val = min(papers_vals) if papers_vals else 1
         
-        coauth_vals = [int(H.nodes[n].get("num_coauthors") or 0) for n in H.nodes()]
-        max_coauth = max(coauth_vals) if coauth_vals else 1
-        
         for node in H.nodes():
             x, y = pos[node]
             node_x.append(x)
@@ -948,12 +956,9 @@ with tab1:
                 norm = 0.5
             node_sizes.append(float(15 + norm ** 0.5 * 65))
             
-            # Color by coauthors
-            if max_coauth > 0:
-                norm_c = num_coauthors / max_coauth
-            else:
-                norm_c = 0
-            node_colors.append(norm_c)
+            # Color by number of co-authors (raw count, so the colorbar reads
+            # in real co-author counts rather than an abstract 0-1 scale).
+            node_colors.append(num_coauthors)
         
         # Label nodes with names when the network is small enough to stay legible.
         show_labels = n <= 40
@@ -970,7 +975,7 @@ with tab1:
                 size=node_sizes,
                 color=node_colors,
                 colorscale="Tealgrn",
-                colorbar=dict(title="Co-authors", thickness=15, x=1.02),
+                colorbar=dict(title="Number of<br>co-authors", thickness=15, x=1.02),
                 line=dict(width=2, color="white"),
                 opacity=0.9
             ),
