@@ -787,7 +787,12 @@ with tab1:
             )
 
     with col_top_n:
-        top_n = st.slider("Number of authors to show", 10, 200, 25, key="top_n_authors")
+        st.markdown("Number of authors to show")
+        top_n = st.number_input(
+            "Number of authors to show",
+            min_value=10, max_value=200, value=25, step=5,
+            key="top_n_authors", label_visibility="collapsed",
+        )
     
     # Filter papers by year
     df_filtered = df[df["Year"].between(year_min, year_max)]
