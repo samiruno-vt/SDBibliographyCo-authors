@@ -28,6 +28,15 @@ PUB_TYPE_ORDER = [
     "Textbook",
 ]
 
+# Publication categories that are never hyperlinked in shared-paper lists.
+# The title and year are still shown; the link is suppressed even where the
+# data has one (3,627 of the 3,634 D-memos currently carry a link).
+UNLINKED_CATEGORIES = {"D-memo"}
+
+# Footer links shown beneath every tab.
+BIBLIOGRAPHY_URL = "https://systemdynamics.org/bibliography/"
+CONTACT_EMAIL = "office@systemdynamics.org"
+
 
 def edge_visual(weight):
     """Return (width, color) for a co-authorship edge so the number of shared
@@ -72,6 +81,18 @@ def parse_authors(authors_str: str) -> list:
     raw = [a.strip() for a in str(authors_str).split(",")]
     raw = [a for a in raw if a]
     return [normalize_author_name(a) for a in raw if normalize_author_name(a)]
+
+
+def clean_title(title) -> str:
+    """Normalize whitespace in a paper title.
+
+    Mirrors the normalization applied when paper details were written onto the
+    graph edges, so a title read back off an edge matches the corresponding
+    row in the dataframe.
+    """
+    if title is None or pd.isna(title):
+        return ""
+    return _whitespace_re.sub(" ", str(title)).strip()
 
 
 # =============================================================================
@@ -567,6 +588,54 @@ def get_org_papers(_df, _G, org, mode="full"):
 def load_dataframe():
     return pd.read_parquet(os.path.join("data", "papers_bibliography.parquet"))
 
+@st.cache_data
+def get_title_category_map(_df):
+    """Map cleaned, lowercased paper title -> publication category.
+
+    Paper details stored on the graph edges carry only title/year/link, so the
+    category has to be recovered by title rather than read off the edge. This
+    is safe for the current bibliography: 616 of the 16,842 titles are
+    duplicated across rows, but none of the duplicates disagree on category,
+    so the mapping is unambiguous.
+
+    Returns an empty map if the dataframe has no `category` column, in which
+    case no link suppression happens and every paper renders as before.
+    """
+    if "category" not in _df.columns:
+        return {}
+    mapping = {}
+    for title, category in zip(_df["Title"], _df["category"]):
+        if category is None or pd.isna(category):
+            continue
+        key = clean_title(title).lower()
+        if key:
+            mapping[key] = category
+    return mapping
+
+
+def paper_category(paper, category_map):
+    """Publication category for a paper dict taken off a graph edge, or None."""
+    return category_map.get(clean_title(paper.get("title")).lower())
+
+
+def render_shared_papers(papers, weight, category_map):
+    """Render the shared-papers list shown when a network edge is clicked.
+
+    Papers in UNLINKED_CATEGORIES (D-memos) always render as plain title and
+    year, never as a hyperlink, even when the data has a link for them.
+    """
+    if not papers:
+        st.markdown(f"- {weight} shared paper(s) (no details available)")
+        return
+    for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
+        year = p.get("year") or "?"
+        title = p.get("title") or "(no title)"
+        link = p.get("link")
+        if link and paper_category(p, category_map) not in UNLINKED_CATEGORIES:
+            st.markdown(f"- [{title}]({link}) ({year})")
+        else:
+            st.markdown(f"- {title} ({year})")
+
 @st.cache_resource
 def load_graph():
     with open(os.path.join("data", "coauthor_graph_bibliography.pkl"), "rb") as f:
@@ -627,6 +696,9 @@ G_full = load_graph()
 G_conf = load_graph_conference()
 author_stats = load_author_stats()
 
+# Title -> publication category, used to suppress links on D-memos.
+title_category_map = get_title_category_map(df_full)
+
 # Dataset-wide filter option lists and author -> org map
 all_countries = get_all_countries(author_stats)
 all_orgs = get_all_orgs(author_stats)
@@ -675,7 +747,7 @@ st.title("System Dynamics Collaboration Explorer (Demo)")
 if "conf_only" not in st.session_state:
     st.session_state.conf_only = False
 conference_only = st.toggle(
-    "Conference proceedings only",
+    "International System Dynamics Conference proceedings only",
     key="conf_only",
 )
 mode = "conference" if conference_only else "full"
@@ -688,7 +760,11 @@ else:
     G = G_full
 all_authors_sorted = get_all_authors_sorted(G, mode=mode)
 
-_scope = "Conference proceedings only" if conference_only else "Full bibliography"
+_scope = (
+    "International System Dynamics Conference proceedings only"
+    if conference_only
+    else "Full bibliography"
+)
 if len(df):
     st.caption(
         f"**{_scope}** · Exploring **{len(df):,}** papers and "
@@ -781,7 +857,8 @@ with tab1:
             with st.popover(_pt_label, use_container_width=True):
                 st.caption(
                     "Filter authors by the type of entry their papers come from. "
-                    "This is separate from the Conference proceedings only toggle."
+                    "This is separate from the International System Dynamics "
+                    "Conference proceedings only toggle."
                 )
                 selected_pub_types = [
                     t for t in pub_type_options
@@ -1055,17 +1132,7 @@ with tab1:
             if col_clear.button("Clear", key="tab1_clear_btn"):
                 st.session_state[_t1_clear] += 1
                 st.rerun()
-            if papers:
-                for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
-                    year = p.get("year") or "?"
-                    title = p.get("title") or "(no title)"
-                    link = p.get("link")
-                    if link:
-                        st.markdown(f"- [{title}]({link}) ({year})")
-                    else:
-                        st.markdown(f"- {title} ({year})")
-            else:
-                st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
+            render_shared_papers(papers, edata["weight"], title_category_map)
     else:
         st.info("No nodes to display.")
 
@@ -1193,17 +1260,7 @@ with tab2:
                         if col_clear.button("Clear", key=f"clear_btn_{selected_author}"):
                             st.session_state[clear_key] += 1
                             st.rerun()
-                        if papers:
-                            for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
-                                year  = p.get("year") or "?"
-                                title = p.get("title") or "(no title)"
-                                link  = p.get("link")
-                                if link:
-                                    st.markdown(f"- [{title}]({link}) ({year})")
-                                else:
-                                    st.markdown(f"- {title} ({year})")
-                        else:
-                            st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
+                        render_shared_papers(papers, edata["weight"], title_category_map)
                     else:
                         st.caption("Click on a connection line (midpoint) to see the shared papers between two authors.")
                 else:
@@ -1536,7 +1593,8 @@ def get_all_forrester_distances(_G, reference_node, mode="full"):
 with tab_pf:
     st.header("Co-author Distance")
     st.markdown(
-        "Find the co-authorship distance and the shortest path(s) between any two authors."
+        "Find the co-authorship distance and the shortest path(s) between any "
+        "two authors. For example, how far away are you from Jay Forrester?"
     )
 
     left, right = st.columns([1, 1.5])
@@ -1726,18 +1784,22 @@ with tab_on:
                                 if col_clear.button("Clear", key=f"orgnet_clear_btn_{selected_org}"):
                                     st.session_state[clear_key] += 1
                                     st.rerun()
-                                if papers:
-                                    for p in sorted(papers, key=lambda x: x.get("year") or 0, reverse=True):
-                                        year = p.get("year") or "?"
-                                        title = p.get("title") or "(no title)"
-                                        link = p.get("link")
-                                        if link:
-                                            st.markdown(f"- [{title}]({link}) ({year})")
-                                        else:
-                                            st.markdown(f"- {title} ({year})")
-                                else:
-                                    st.markdown(f"- {edata['weight']} shared paper(s) (no details available)")
+                                render_shared_papers(papers, edata["weight"], title_category_map)
                             else:
                                 st.caption("Click on a connection line (midpoint) to see the shared papers between two organizations.")
                     else:
                         st.info("No cross-organization collaborations recorded for this organization.")
+
+
+# =============================================================================
+# Footer (renders below the tab bar, so it appears on every tab)
+# =============================================================================
+
+st.markdown("---")
+st.markdown(
+    f"If something is missing, add it here: "
+    f"[SD Bibliography]({BIBLIOGRAPHY_URL})"
+)
+st.markdown(
+    f"Feedback? Email us at [{CONTACT_EMAIL}](mailto:{CONTACT_EMAIL})"
+)
